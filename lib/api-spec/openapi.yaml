@@ -3,20 +3,27 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: AAA Bets - Horse Racing Predictor API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: races
+    description: Race operations
+  - name: predictions
+    description: Prediction operations
+  - name: weights
+    description: Weight configuration operations
+  - name: chat
+    description: AI chat operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +31,234 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /races:
+    get:
+      operationId: getRaces
+      tags: [races]
+      summary: Get today's races
+      parameters:
+        - name: venue
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of races
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Race"
+    post:
+      operationId: createRace
+      tags: [races]
+      summary: Create a race (manual entry)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRaceBody"
+      responses:
+        "201":
+          description: Race created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Race"
+
+  /races/{raceId}:
+    get:
+      operationId: getRace
+      tags: [races]
+      summary: Get race by ID
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Race detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RaceDetail"
+        "404":
+          description: Race not found
+
+  /races/{raceId}/horses:
+    get:
+      operationId: getRaceHorses
+      tags: [races]
+      summary: Get horses in a race
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of horses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Horse"
+    post:
+      operationId: addHorse
+      tags: [races]
+      summary: Add a horse to a race
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHorseBody"
+      responses:
+        "201":
+          description: Horse added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Horse"
+
+  /races/{raceId}/predictions:
+    get:
+      operationId: getRacePredictions
+      tags: [predictions]
+      summary: Get predictions for a race
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of predictions ranked by score
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Prediction"
+
+  /races/{raceId}/analyze:
+    post:
+      operationId: analyzeRace
+      tags: [predictions]
+      summary: Trigger AI analysis for a race
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Analysis triggered and predictions returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+        "404":
+          description: Race not found
+
+  /weights:
+    get:
+      operationId: getWeights
+      tags: [weights]
+      summary: Get current prediction weights
+      responses:
+        "200":
+          description: Current weights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictionWeights"
+    put:
+      operationId: updateWeights
+      tags: [weights]
+      summary: Update prediction weights
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWeightsBody"
+      responses:
+        "200":
+          description: Updated weights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictionWeights"
+
+  /chat:
+    post:
+      operationId: sendChatMessage
+      tags: [chat]
+      summary: Send a chat message to adjust predictions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatMessageBody"
+      responses:
+        "200":
+          description: AI response with possible weight adjustments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+
+  /chat/history:
+    get:
+      operationId: getChatHistory
+      tags: [chat]
+      summary: Get recent chat history
+      responses:
+        "200":
+          description: Chat messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatMessage"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [races]
+      summary: Get dashboard summary stats
+      responses:
+        "200":
+          description: Summary stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +269,404 @@ components:
       required:
         - status
 
+    Race:
+      type: object
+      properties:
+        id:
+          type: integer
+        raceNumber:
+          type: integer
+        name:
+          type: string
+        venue:
+          type: string
+        distance:
+          type: integer
+        raceTime:
+          type: string
+        status:
+          type: string
+          enum: [upcoming, analyzing, completed, cancelled]
+        surface:
+          type: string
+        grade:
+          type: ["string", "null"]
+        prize:
+          type: ["string", "null"]
+        horseCount:
+          type: integer
+        nextUpdateAt:
+          type: ["string", "null"]
+        lastAnalyzedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - raceNumber
+        - name
+        - venue
+        - distance
+        - raceTime
+        - status
+        - surface
+        - horseCount
+        - createdAt
+
+    RaceDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        raceNumber:
+          type: integer
+        name:
+          type: string
+        venue:
+          type: string
+        distance:
+          type: integer
+        raceTime:
+          type: string
+        status:
+          type: string
+        surface:
+          type: string
+        grade:
+          type: ["string", "null"]
+        prize:
+          type: ["string", "null"]
+        horses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Horse"
+        predictions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Prediction"
+        nextUpdateAt:
+          type: ["string", "null"]
+        lastAnalyzedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - raceNumber
+        - name
+        - venue
+        - distance
+        - raceTime
+        - status
+        - surface
+        - horses
+        - predictions
+        - createdAt
+
+    Horse:
+      type: object
+      properties:
+        id:
+          type: integer
+        raceId:
+          type: integer
+        name:
+          type: string
+        number:
+          type: integer
+        jockey:
+          type: string
+        trainer:
+          type: string
+        form:
+          type: string
+        weight:
+          type: ["number", "null"]
+        currentOdds:
+          type: number
+        openingOdds:
+          type: ["number", "null"]
+        oddsMovement:
+          type: string
+          enum: [shortening, drifting, stable, unknown]
+        courseRecord:
+          type: boolean
+        distanceRecord:
+          type: boolean
+        trainerJockeyRecord:
+          type: string
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - raceId
+        - name
+        - number
+        - jockey
+        - trainer
+        - form
+        - currentOdds
+        - oddsMovement
+        - courseRecord
+        - distanceRecord
+        - trainerJockeyRecord
+        - createdAt
+
+    Prediction:
+      type: object
+      properties:
+        id:
+          type: integer
+        raceId:
+          type: integer
+        horseId:
+          type: integer
+        horseName:
+          type: string
+        rank:
+          type: integer
+        score:
+          type: number
+        confidence:
+          type: number
+        factors:
+          $ref: "#/components/schemas/PredictionFactors"
+        aiSummary:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - raceId
+        - horseId
+        - horseName
+        - rank
+        - score
+        - confidence
+        - factors
+        - createdAt
+
+    PredictionFactors:
+      type: object
+      properties:
+        courseForm:
+          type: number
+        formDistance:
+          type: number
+        jockeyTrainer:
+          type: number
+        oddsMovement:
+          type: number
+        history:
+          type: number
+        overall:
+          type: number
+      required:
+        - courseForm
+        - formDistance
+        - jockeyTrainer
+        - oddsMovement
+        - history
+        - overall
+
+    AnalysisResult:
+      type: object
+      properties:
+        raceId:
+          type: integer
+        predictions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Prediction"
+        analyzedAt:
+          type: string
+        nextUpdateAt:
+          type: string
+      required:
+        - raceId
+        - predictions
+        - analyzedAt
+        - nextUpdateAt
+
+    PredictionWeights:
+      type: object
+      properties:
+        id:
+          type: integer
+        courseForm:
+          type: number
+        formDistance:
+          type: number
+        jockeyTrainer:
+          type: number
+        oddsMovement:
+          type: number
+        history:
+          type: number
+        updatedAt:
+          type: string
+      required:
+        - id
+        - courseForm
+        - formDistance
+        - jockeyTrainer
+        - oddsMovement
+        - history
+        - updatedAt
+
+    UpdateWeightsBody:
+      type: object
+      properties:
+        courseForm:
+          type: number
+        formDistance:
+          type: number
+        jockeyTrainer:
+          type: number
+        oddsMovement:
+          type: number
+        history:
+          type: number
+      required:
+        - courseForm
+        - formDistance
+        - jockeyTrainer
+        - oddsMovement
+        - history
+
+    CreateRaceBody:
+      type: object
+      properties:
+        raceNumber:
+          type: integer
+        name:
+          type: string
+        venue:
+          type: string
+        distance:
+          type: integer
+        raceTime:
+          type: string
+        surface:
+          type: string
+        grade:
+          type: ["string", "null"]
+        prize:
+          type: ["string", "null"]
+      required:
+        - raceNumber
+        - name
+        - venue
+        - distance
+        - raceTime
+        - surface
+
+    CreateHorseBody:
+      type: object
+      properties:
+        name:
+          type: string
+        number:
+          type: integer
+        jockey:
+          type: string
+        trainer:
+          type: string
+        form:
+          type: string
+        weight:
+          type: ["number", "null"]
+        currentOdds:
+          type: number
+        openingOdds:
+          type: ["number", "null"]
+        courseRecord:
+          type: boolean
+        distanceRecord:
+          type: boolean
+        trainerJockeyRecord:
+          type: string
+        notes:
+          type: ["string", "null"]
+      required:
+        - name
+        - number
+        - jockey
+        - trainer
+        - form
+        - currentOdds
+
+    ChatMessageBody:
+      type: object
+      properties:
+        message:
+          type: string
+        raceId:
+          type: ["integer", "null"]
+      required:
+        - message
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        raceId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - role
+        - content
+        - createdAt
+
+    ChatResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        updatedWeights:
+          $ref: "#/components/schemas/PredictionWeights"
+        triggeredAnalysis:
+          type: boolean
+      required:
+        - message
+        - triggeredAnalysis
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalRaces:
+          type: integer
+        analyzedRaces:
+          type: integer
+        upcomingRaces:
+          type: integer
+        totalHorses:
+          type: integer
+        nextRaceTime:
+          type: ["string", "null"]
+        nextRaceVenue:
+          type: ["string", "null"]
+        topPick:
+          type: ["string", "null"]
+        topPickRace:
+          type: ["string", "null"]
+        venues:
+          type: array
+          items:
+            type: string
+      required:
+        - totalRaces
+        - analyzedRaces
+        - upcomingRaces
+        - totalHorses
+        - venues
