@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pattern Predictor</title>
+  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="grain"></div>
+
+  <aside class="sidebar">
+    <header class="sidebar-header">
+      <div class="logo-mark">◈</div>
+      <h1>Pattern<br/><em>Predictor</em></h1>
+      <p class="subtitle">Multi-perspective time series forecasting</p>
+    </header>
+
+    <section class="controls">
+      <div class="control-group">
+        <label>Preset Pattern</label>
+        <div class="preset-buttons">
+          <button class="preset-btn active" data-preset="sine">Sine</button>
+          <button class="preset-btn" data-preset="trend">Trend</button>
+          <button class="preset-btn" data-preset="seasonal">Seasonal</button>
+          <button class="preset-btn" data-preset="noisy">Noisy</button>
+          <button class="preset-btn" data-preset="stationary">Stationary</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>Prediction Points <span class="val" id="pred-val">3</span></label>
+        <input type="range" id="pred-points" min="1" max="10" value="3" />
+      </div>
+
+      <div class="control-group">
+        <label>Final Mode</label>
+        <div class="preset-buttons">
+          <button class="preset-btn active" data-agg="average" id="agg-average">Average</button>
+          <button class="preset-btn" data-agg="median" id="agg-median">Median</button>
+          <button class="preset-btn" data-agg="mode" id="agg-mode">Mode</button>
+          <button class="preset-btn" data-agg="weighted" id="agg-weighted">Weighted</button>
+          <button class="preset-btn" data-agg="quantile" id="agg-quantile">Q75</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <label>Quantile q <span class="val" id="q-val">0.75</span></label>
+        <input type="range" id="quantile-q" min="0.1" max="0.9" step="0.05" value="0.75" />
+      </div>
+
+      <div class="control-group">
+        <label>Scenarios <span class="val" id="scn-val">1</span></label>
+        <input type="range" id="scenarios-count" min="1" max="5" value="1" />
+      </div>
+
+      <div class="control-group">
+        <label>Custom Setup</label>
+        <select id="custom-setup">
+          <option value="standard">Standard</option>
+          <option value="markets">Markets</option>
+          <option value="crypto">Crypto</option>
+          <option value="data">Data Capture</option>
+        </select>
+        <div style="display:flex; gap:0.4rem; margin-top:0.4rem">
+          <button id="auto-weight-btn" class="preset-btn" title="Set weights by stability">Auto-Weight</button>
+          <button id="equal-weight-btn" class="preset-btn" title="Set equal weights">Equal Weights</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>Noise Level <span class="val" id="noise-val">0.1</span></label>
+        <input type="range" id="noise-level" min="0" max="1" step="0.05" value="0.1" />
+      </div>
+      <div class="control-group">
+        <label>Y Scale <span class="val" id="yscale-val">1.00</span></label>
+        <input type="range" id="y-scale" min="0.5" max="2" step="0.05" value="1" />
+      </div>
+
+      <div class="control-group">
+        <label>X Label</label>
+        <input type="text" id="x-label" placeholder="X axis label" />
+      </div>
+
+      <div class="control-group">
+        <label>Y Label</label>
+        <input type="text" id="y-label" placeholder="Y axis label" />
+      </div>
+
+      <div class="control-group">
+        <label>Paste Data</label>
+        <textarea id="data-input" rows="3" placeholder="CSV or JSON array of numbers"></textarea>
+        <div style="display:flex; gap:0.4rem; margin-top:0.4rem">
+          <input type="file" id="base-file" />
+          <button id="upload-base-btn" class="preset-btn">Upload</button>
+          <button id="load-data-btn" class="preset-btn" style="flex:1">Load</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>Events</label>
+        <div style="display:flex; gap:0.4rem">
+          <input type="number" id="event-index" min="0" placeholder="Step" style="flex:1"/>
+          <input type="number" id="event-impact" step="0.1" placeholder="Impact" style="flex:1"/>
+          <button id="add-event-btn" class="preset-btn">Add</button>
+          <button id="clear-event-btn" class="preset-btn">Clear</button>
+        </div>
+        <div id="events-list" class="weights"></div>
+      </div>
+
+      <div class="control-group">
+        <label>Series Inputs</label>
+        <div id="series-inputs" style="display:flex; flex-direction:column; gap:0.5rem">
+          <div class="series-row">
+            <div style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="series-1-on" checked />
+              <span class="weight-label">W</span><input type="number" id="series-1-weight" value="1" step="0.1" style="width:70px"/>
+            </div>
+            <textarea id="series-1" rows="2" placeholder="Series 1: CSV numbers or [x,y] pairs"></textarea>
+            <div style="display:flex; gap:0.4rem; margin:0.3rem 0">
+              <input type="file" id="series-1-file" /><button id="upload-series-1-btn" class="preset-btn">Upload</button>
+            </div>
+          </div>
+          <div class="series-row">
+            <div style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="series-2-on" />
+              <span class="weight-label">W</span><input type="number" id="series-2-weight" value="1" step="0.1" style="width:70px"/>
+            </div>
+            <textarea id="series-2" rows="2" placeholder="Series 2: CSV numbers or [x,y] pairs"></textarea>
+            <div style="display:flex; gap:0.4rem; margin:0.3rem 0">
+              <input type="file" id="series-2-file" /><button id="upload-series-2-btn" class="preset-btn">Upload</button>
+            </div>
+          </div>
+          <div class="series-row">
+            <div style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="series-3-on" />
+              <span class="weight-label">W</span><input type="number" id="series-3-weight" value="1" step="0.1" style="width:70px"/>
+            </div>
+            <textarea id="series-3" rows="2" placeholder="Series 3: CSV numbers or [x,y] pairs"></textarea>
+            <div style="display:flex; gap:0.4rem; margin:0.3rem 0">
+              <input type="file" id="series-3-file" /><button id="upload-series-3-btn" class="preset-btn">Upload</button>
+            </div>
+          </div>
+          <div class="series-row">
+            <div style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="series-4-on" />
+              <span class="weight-label">W</span><input type="number" id="series-4-weight" value="1" step="0.1" style="width:70px"/>
+            </div>
+            <textarea id="series-4" rows="2" placeholder="Series 4: CSV numbers or [x,y] pairs"></textarea>
+            <div style="display:flex; gap:0.4rem; margin:0.3rem 0">
+              <input type="file" id="series-4-file" /><button id="upload-series-4-btn" class="preset-btn">Upload</button>
+            </div>
+          </div>
+          <div class="series-row">
+            <div style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="series-5-on" />
+              <span class="weight-label">W</span><input type="number" id="series-5-weight" value="1" step="0.1" style="width:70px"/>
+            </div>
+            <textarea id="series-5" rows="2" placeholder="Series 5: CSV numbers or [x,y] pairs"></textarea>
+            <div style="display:flex; gap:0.4rem; margin:0.3rem 0">
+              <input type="file" id="series-5-file" /><button id="upload-series-5-btn" class="preset-btn">Upload</button>
+            </div>
+          </div>
+        </div>
+        <button id="load-series-btn" class="preset-btn" style="width:100%; margin-top:0.3rem">Load Series</button>
+      </div>
+
+      <div class="control-group">
+        <label>External Predictions</label>
+        <textarea id="external-preds" rows="2" placeholder="CSV or JSON array for blending"></textarea>
+        <label>Blend Alpha <span class="val" id="alpha-val">0.50</span></label>
+        <input type="range" id="alpha-slider" min="0" max="1" step="0.05" value="0.5" />
+      </div>
+
+      <div class="control-group">
+        <label>Live Feed</label>
+        <input type="text" id="feed-url" placeholder="https://example.com/feed.json" />
+        <div style="display:flex; gap:0.4rem; margin-top:0.4rem">
+          <input type="number" id="feed-interval" value="5" min="1" style="width:90px" />
+          <label style="display:flex; align-items:center; gap:0.3rem"><input type="checkbox" id="auto-run" checked />Auto-Run</label>
+          <button id="start-live" class="preset-btn">Start</button>
+          <button id="stop-live" class="preset-btn">Stop</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>Max Draw Points <span class="val" id="mdp-val">500</span></label>
+        <input type="range" id="max-draw-points" min="100" max="5000" step="50" value="500" />
+      </div>
+
+      <div class="control-group">
+        <button id="export-json-btn" class="run-btn">Export JSON</button>
+        <button id="export-png-btn" class="clear-btn" style="margin-top:0.4rem">Export PNG</button>
+        <button id="export-csv-btn" class="clear-btn" style="margin-top:0.4rem">Export CSV</button>
+        <div style="display:flex; gap:0.4rem; margin-top:0.4rem">
+          <button id="save-session-btn" class="preset-btn">Save Session</button>
+          <button id="load-session-btn" class="preset-btn">Load Session</button>
+        </div>
+      </div>
+
+      <button id="run-btn" class="run-btn">Run Forecast ◈</button>
+      <button id="clear-btn" class="clear-btn">Clear Canvas</button>
+    </section>
+
+    <section class="diagnostics" id="diagnostics">
+      <h3>Pattern Analysis</h3>
+      <div class="diag-grid" id="diag-grid">
+        <div class="diag-item"><span class="diag-label">Pattern Type</span><span class="diag-val" id="d-type">—</span></div>
+        <div class="diag-item"><span class="diag-label">Period</span><span class="diag-val" id="d-period">—</span></div>
+        <div class="diag-item"><span class="diag-label">Amplitude</span><span class="diag-val" id="d-amp">—</span></div>
+        <div class="diag-item"><span class="diag-label">Trend Slope</span><span class="diag-val" id="d-slope">—</span></div>
+        <div class="diag-item"><span class="diag-label">Cycles</span><span class="diag-val" id="d-cycles">—</span></div>
+        <div class="diag-item"><span class="diag-label">Confidence</span><span class="diag-val" id="d-conf">—</span></div>
+      </div>
+
+      <h3 style="margin-top:1.2rem">Ensemble Weights</h3>
+      <div class="weights" id="weights-display"></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div class="canvas-wrapper">
+      <canvas id="graph-canvas"></canvas>
+      <div class="canvas-hint" id="canvas-hint">Click to plot points · Right-click to remove last</div>
+    </div>
+
+    <div class="perspective-panels" id="perspective-panels">
+      <div class="panel">
+        <div class="panel-dot cyclic"></div>
+        <span>Cyclic</span>
+      </div>
+      <div class="panel">
+        <div class="panel-dot trend"></div>
+        <span>Trend</span>
+      </div>
+      <div class="panel">
+        <div class="panel-dot mavg"></div>
+        <span>Moving Avg</span>
+      </div>
+      <div class="panel">
+        <div class="panel-dot constraint"></div>
+        <span>Constraint</span>
+      </div>
+      <div class="panel">
+        <div class="panel-dot ensemble"></div>
+        <span>Ensemble</span>
+      </div>
+    </div>
+  </main>
+
+  <script src="predictor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
