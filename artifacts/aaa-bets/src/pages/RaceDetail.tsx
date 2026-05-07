@@ -13,7 +13,7 @@ import {
   getGetRacePredictionsQueryKey,
   getGetRaceHorsesQueryKey,
 } from "@workspace/api-client-react";
-import { ArrowLeft, Zap, Plus, Clock, TrendingDown, TrendingUp, Minus, RefreshCw } from "lucide-react";
+import { ArrowLeft, Zap, Plus, Clock, TrendingDown, TrendingUp, Minus, RefreshCw, XCircle, Wifi } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -189,6 +189,8 @@ export default function RaceDetail() {
   }
 
   const sortedPreds = [...(predictions ?? [])].sort((a, b) => a.rank - b.rank);
+  const activeHorses = (horses ?? []).filter((h) => !(h as { scratched?: boolean }).scratched);
+  const scratchedHorses = (horses ?? []).filter((h) => (h as { scratched?: boolean }).scratched);
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
@@ -201,10 +203,13 @@ export default function RaceDetail() {
           </div>
         </Link>
         <div className="flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-bold text-foreground">{race.name}</h1>
-            {race.grade && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium">{race.grade}</span>
+            {race.grade && <span className="text-xs px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium">{race.grade}</span>}
+            {(race as { syncedFrom?: string }).syncedFrom === "goldcircle" && (
+              <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-medium">
+                <Wifi className="size-3" /> Auto-synced
+              </span>
             )}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
@@ -216,14 +221,10 @@ export default function RaceDetail() {
         </div>
         <button
           onClick={handleAnalyze}
-          disabled={analyzeRace.isPending || (horses ?? []).length === 0}
+          disabled={analyzeRace.isPending || activeHorses.length === 0}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
-          {analyzeRace.isPending ? (
-            <RefreshCw className="size-4 animate-spin" />
-          ) : (
-            <Zap className="size-4" />
-          )}
+          {analyzeRace.isPending ? <RefreshCw className="size-4 animate-spin" /> : <Zap className="size-4" />}
           {analyzeRace.isPending ? "Analyzing..." : "Analyze"}
         </button>
       </div>
@@ -267,25 +268,15 @@ export default function RaceDetail() {
                         </div>
                         <div className="text-right">
                           <p className="text-lg font-bold text-primary">{(pred.score * 100).toFixed(0)}pts</p>
-                          <p className="text-xs text-muted-foreground">
-                            {(pred.confidence * 100).toFixed(0)}% confidence
-                          </p>
+                          <p className="text-xs text-muted-foreground">{(pred.confidence * 100).toFixed(0)}% confidence</p>
                         </div>
                       </div>
-                      {pred.aiSummary && (
-                        <p className="text-sm text-muted-foreground mt-2 italic">{pred.aiSummary}</p>
-                      )}
+                      {pred.aiSummary && <p className="text-sm text-muted-foreground mt-2 italic">{pred.aiSummary}</p>}
                       {factors && Object.keys(factors).length > 0 && (
                         <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
-                          {Object.entries(factors)
-                            .filter(([k]) => k !== "overall")
-                            .map(([key, val]) => (
-                              <ScoreBar
-                                key={key}
-                                label={key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())}
-                                value={val}
-                              />
-                            ))}
+                          {Object.entries(factors).filter(([k]) => k !== "overall").map(([key, val]) => (
+                            <ScoreBar key={key} label={key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())} value={val} />
+                          ))}
                         </div>
                       )}
                     </div>
@@ -299,7 +290,10 @@ export default function RaceDetail() {
 
       <div className="bg-card border border-card-border rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-card-border">
-          <h2 className="font-semibold text-foreground">Runners ({horses?.length ?? 0})</h2>
+          <h2 className="font-semibold text-foreground">
+            Runners ({activeHorses.length}
+            {scratchedHorses.length > 0 && <span className="text-destructive"> · {scratchedHorses.length} scratched</span>})
+          </h2>
           <button
             onClick={() => setShowAddHorse(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/70 text-sm font-medium transition-colors"
@@ -310,35 +304,50 @@ export default function RaceDetail() {
         {(horses ?? []).length === 0 ? (
           <div className="p-8 text-center">
             <p className="text-muted-foreground text-sm">No horses added yet.</p>
-            <button onClick={() => setShowAddHorse(true)}
-              className="mt-3 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
+            <button onClick={() => setShowAddHorse(true)} className="mt-3 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
               Add First Horse
             </button>
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {[...(horses ?? [])].sort((a, b) => a.number - b.number).map((horse) => (
-              <div key={horse.id} className="px-5 py-3.5 flex items-center gap-4">
-                <div className="size-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                  <span className="text-xs font-bold text-muted-foreground">#{horse.number}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm text-foreground">{horse.name}</p>
-                    {horse.courseRecord && <span className="text-xs bg-accent/15 text-accent px-1.5 py-0.5 rounded">Course</span>}
-                    {horse.distanceRecord && <span className="text-xs bg-blue-500/15 text-blue-400 px-1.5 py-0.5 rounded">Distance</span>}
+            {[...(horses ?? [])].sort((a, b) => a.number - b.number).map((horse) => {
+              const isScratched = (horse as { scratched?: boolean }).scratched;
+              const scratchReason = (horse as { scratchReason?: string }).scratchReason;
+              return (
+                <div key={horse.id} className={cn("px-5 py-3.5 flex items-center gap-4", isScratched && "opacity-50")}>
+                  <div className={cn(
+                    "size-8 rounded-full flex items-center justify-center shrink-0",
+                    isScratched ? "bg-destructive/15" : "bg-muted",
+                  )}>
+                    {isScratched
+                      ? <XCircle className="size-4 text-destructive" />
+                      : <span className="text-xs font-bold text-muted-foreground">#{horse.number}</span>
+                    }
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {horse.jockey} / {horse.trainer}
-                    {horse.form && ` · Form: ${horse.form}`}
-                  </p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className={cn("font-medium text-sm", isScratched ? "line-through text-muted-foreground" : "text-foreground")}>
+                        {horse.name}
+                      </p>
+                      {isScratched && <span className="text-xs bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-medium">SCRATCHED</span>}
+                      {!isScratched && horse.courseRecord && <span className="text-xs bg-accent/15 text-accent px-1.5 py-0.5 rounded">Course</span>}
+                      {!isScratched && horse.distanceRecord && <span className="text-xs bg-blue-500/15 text-blue-400 px-1.5 py-0.5 rounded">Distance</span>}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {horse.jockey} / {horse.trainer}
+                      {horse.form && ` · Form: ${horse.form}`}
+                      {isScratched && scratchReason && ` · ${scratchReason}`}
+                    </p>
+                  </div>
+                  {!isScratched && (
+                    <div className="text-right shrink-0">
+                      <p className="font-semibold text-sm text-foreground">{horse.currentOdds}</p>
+                      <OddsChip movement={horse.oddsMovement} />
+                    </div>
+                  )}
                 </div>
-                <div className="text-right shrink-0">
-                  <p className="font-semibold text-sm text-foreground">{horse.currentOdds}</p>
-                  <OddsChip movement={horse.oddsMovement} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { useGetDashboardSummary, useGetRaces } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Trophy, Clock, Zap, Users, TrendingUp, ChevronRight, BarChart2 } from "lucide-react";
+import { Trophy, Clock, Zap, Users, TrendingUp, ChevronRight, BarChart2, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function StatCard({
@@ -16,21 +17,68 @@ function StatCard({
 }) {
   return (
     <div className="bg-card border border-card-border rounded-xl p-5 flex items-center gap-4">
-      <div
-        className={cn(
-          "size-11 rounded-lg flex items-center justify-center shrink-0",
-          color === "primary" && "bg-primary/15 text-primary",
-          color === "green" && "bg-accent/15 text-accent",
-          color === "blue" && "bg-blue-500/15 text-blue-400",
-          color === "purple" && "bg-purple-500/15 text-purple-400",
-        )}
-      >
+      <div className={cn(
+        "size-11 rounded-lg flex items-center justify-center shrink-0",
+        color === "primary" && "bg-primary/15 text-primary",
+        color === "green" && "bg-accent/15 text-accent",
+        color === "blue" && "bg-blue-500/15 text-blue-400",
+        color === "purple" && "bg-purple-500/15 text-purple-400",
+      )}>
         <Icon className="size-5" />
       </div>
       <div>
         <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{label}</p>
         <p className="text-2xl font-bold text-foreground mt-0.5">{value ?? "—"}</p>
       </div>
+    </div>
+  );
+}
+
+function SyncBar() {
+  const [syncing, setSyncing] = useState(false);
+  const [lastResult, setLastResult] = useState<{ racesCreated?: number; meetingsFound?: number; status?: string } | null>(null);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json() as { racesCreated?: number; meetingsFound?: number; status?: string };
+      setLastResult(data);
+      setTimeout(() => window.location.reload(), 800);
+    } catch {
+      setLastResult({ status: "error" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between bg-card border border-card-border rounded-xl px-5 py-3.5">
+      <div className="flex items-center gap-3">
+        {lastResult?.status === "error" ? (
+          <AlertCircle className="size-4 text-destructive" />
+        ) : (
+          <CheckCircle className="size-4 text-accent" />
+        )}
+        <div>
+          <p className="text-sm font-medium text-foreground">Auto Race Sync</p>
+          <p className="text-xs text-muted-foreground">
+            {lastResult
+              ? lastResult.status === "error"
+                ? "Sync failed — check connection"
+                : `Found ${lastResult.meetingsFound ?? 0} meeting(s) · ${lastResult.racesCreated ?? 0} new races added`
+              : "Races sync automatically every 2 hours from Gold Circle"}
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={handleSync}
+        disabled={syncing}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+      >
+        <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+        {syncing ? "Syncing..." : "Sync Now"}
+      </button>
     </div>
   );
 }
@@ -53,6 +101,8 @@ export default function Dashboard() {
           AI-powered horse racing predictions for South Africa
         </p>
       </div>
+
+      <SyncBar />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={Trophy} label="Total Races" value={summary?.totalRaces} color="primary" />
@@ -87,11 +137,9 @@ export default function Dashboard() {
           {isLoading ? (
             <div className="p-5 text-center text-muted-foreground text-sm">Loading...</div>
           ) : upcoming.length === 0 ? (
-            <div className="p-5 text-center text-muted-foreground text-sm">
-              No upcoming races.{" "}
-              <Link href="/races">
-                <span className="text-primary hover:underline cursor-pointer">Add one</span>
-              </Link>
+            <div className="p-5 text-center text-muted-foreground text-sm space-y-2">
+              <p>No races loaded yet.</p>
+              <p className="text-xs">Click <strong>Sync Now</strong> above to load today's race card automatically.</p>
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -105,14 +153,12 @@ export default function Dashboard() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "text-xs px-2 py-0.5 rounded-full font-medium",
-                          race.status === "analyzing"
-                            ? "bg-accent/15 text-accent"
-                            : "bg-muted text-muted-foreground",
-                        )}
-                      >
+                      <span className={cn(
+                        "text-xs px-2 py-0.5 rounded-full font-medium",
+                        race.status === "analyzing"
+                          ? "bg-accent/15 text-accent"
+                          : "bg-muted text-muted-foreground",
+                      )}>
                         {race.status === "analyzing" ? "Analyzed" : "Upcoming"}
                       </span>
                       <ChevronRight className="size-4 text-muted-foreground" />
@@ -156,7 +202,7 @@ export default function Dashboard() {
         <h2 className="font-semibold text-foreground mb-3">Quick Links</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { href: "/races", label: "Add Race", icon: Trophy },
+            { href: "/races", label: "All Races", icon: Trophy },
             { href: "/form-guide", label: "Form Guide", icon: BarChart2 },
             { href: "/chat", label: "AI Chat", icon: Zap },
             { href: "/weights", label: "Adjust Weights", icon: Users },
