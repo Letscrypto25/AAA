@@ -127,7 +127,7 @@ Respond with ONLY valid JSON in this exact format:
 }`;
 
   const response = await client.chat.completions.create({
-    model: "llama3-70b-8192",
+    model: "llama-3.3-70b-versatile",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
     max_tokens: 4096,
@@ -202,7 +202,7 @@ Be conversational, insightful, and helpful. Keep responses concise but informati
   ];
 
   const response = await client.chat.completions.create({
-    model: "llama3-70b-8192",
+    model: "llama-3.3-70b-versatile",
     messages: [{ role: "system", content: systemPrompt }, ...messages],
     temperature: 0.7,
     max_tokens: 1024,

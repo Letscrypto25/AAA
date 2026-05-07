@@ -17,7 +17,7 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
-- AI: Groq SDK (LLaMA 3 70B)
+- AI: Groq SDK (LLaMA 3.3 70B — `llama-3.3-70b-versatile`)
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
