@@ -31,6 +31,8 @@ import type {
   PredictionWeights,
   Race,
   RaceDetail,
+  RaceResultSummary,
+  RecordRaceResultBody,
   UpdateWeightsBody,
 } from "./api.schemas";
 
@@ -719,6 +721,93 @@ export const useAnalyzeRace = <
   TContext
 > => {
   return useMutation(getAnalyzeRaceMutationOptions(options));
+};
+
+/**
+ * @summary Record an official result and grade the forecast
+ */
+export const getRecordRaceResultUrl = (raceId: number) => {
+  return `/api/races/${raceId}/result`;
+};
+
+export const recordRaceResult = async (
+  raceId: number,
+  recordRaceResultBody: RecordRaceResultBody,
+  options?: RequestInit,
+): Promise<RaceResultSummary> => {
+  return customFetch<RaceResultSummary>(getRecordRaceResultUrl(raceId), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(recordRaceResultBody),
+  });
+};
+
+export const getRecordRaceResultMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recordRaceResult>>,
+    TError,
+    { raceId: number; data: BodyType<RecordRaceResultBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof recordRaceResult>>,
+  TError,
+  { raceId: number; data: BodyType<RecordRaceResultBody> },
+  TContext
+> => {
+  const mutationKey = ["recordRaceResult"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof recordRaceResult>>,
+    { raceId: number; data: BodyType<RecordRaceResultBody> }
+  > = (props) => {
+    const { raceId, data } = props ?? {};
+
+    return recordRaceResult(raceId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RecordRaceResultMutationResult = NonNullable<
+  Awaited<ReturnType<typeof recordRaceResult>>
+>;
+export type RecordRaceResultMutationBody = BodyType<RecordRaceResultBody>;
+export type RecordRaceResultMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Record an official result and grade the forecast
+ */
+export const useRecordRaceResult = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recordRaceResult>>,
+    TError,
+    { raceId: number; data: BodyType<RecordRaceResultBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof recordRaceResult>>,
+  TError,
+  { raceId: number; data: BodyType<RecordRaceResultBody> },
+  TContext
+> => {
+  return useMutation(getRecordRaceResultMutationOptions(options));
 };
 
 /**

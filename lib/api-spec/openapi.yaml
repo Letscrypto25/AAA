@@ -1,6 +1,5 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
   description: AAA Bets - Horse Racing Predictor API
@@ -36,7 +35,7 @@ paths:
     get:
       operationId: getRaces
       tags: [races]
-      summary: Get today's races
+      summary: Get races with weekly forecast context
       parameters:
         - name: venue
           in: query
@@ -60,7 +59,7 @@ paths:
     post:
       operationId: createRace
       tags: [races]
-      summary: Create a race (manual entry)
+      summary: Create a race
       requestBody:
         required: true
         content:
@@ -144,7 +143,7 @@ paths:
     get:
       operationId: getRacePredictions
       tags: [predictions]
-      summary: Get predictions for a race
+      summary: Get persisted predictions for a race
       parameters:
         - name: raceId
           in: path
@@ -153,7 +152,7 @@ paths:
             type: integer
       responses:
         "200":
-          description: List of predictions ranked by score
+          description: Predictions ranked by score
           content:
             application/json:
               schema:
@@ -165,7 +164,7 @@ paths:
     post:
       operationId: analyzeRace
       tags: [predictions]
-      summary: Trigger AI analysis for a race
+      summary: Trigger forecast generation for a race
       parameters:
         - name: raceId
           in: path
@@ -174,13 +173,38 @@ paths:
             type: integer
       responses:
         "200":
-          description: Analysis triggered and predictions returned
+          description: Forecast generated and returned
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AnalysisResult"
         "404":
           description: Race not found
+
+  /races/{raceId}/result:
+    post:
+      operationId: recordRaceResult
+      tags: [predictions]
+      summary: Record an official result and grade the forecast
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordRaceResultBody"
+      responses:
+        "201":
+          description: Result recorded and grading completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RaceResultSummary"
 
   /weights:
     get:
@@ -216,7 +240,7 @@ paths:
     post:
       operationId: sendChatMessage
       tags: [chat]
-      summary: Send a chat message to adjust predictions
+      summary: Send a chat message to the analyst
       requestBody:
         required: true
         content:
@@ -250,7 +274,7 @@ paths:
     get:
       operationId: getDashboardSummary
       tags: [races]
-      summary: Get dashboard summary stats
+      summary: Get dashboard summary stats and weekly outlook
       responses:
         "200":
           description: Summary stats
@@ -266,8 +290,115 @@ components:
       properties:
         status:
           type: string
+      required: [status]
+
+    PredictionFactors:
+      type: object
+      properties:
+        courseForm:
+          type: number
+        formDistance:
+          type: number
+        jockeyTrainer:
+          type: number
+        oddsMovement:
+          type: number
+        history:
+          type: number
+        overall:
+          type: number
       required:
-        - status
+        - courseForm
+        - formDistance
+        - jockeyTrainer
+        - oddsMovement
+        - history
+        - overall
+
+    PredictionSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        horseId:
+          type: integer
+        horseName:
+          type: string
+        rank:
+          type: integer
+        score:
+          type: number
+        baseConfidence:
+          type: number
+        confidence:
+          type: number
+        confidenceDelta:
+          type: number
+        confidenceBand:
+          type: string
+        timeToRaceMinutes:
+          type: ["integer", "null"]
+        resultStatus:
+          type: string
+        finishPosition:
+          type: ["integer", "null"]
+        aiSummary:
+          type: ["string", "null"]
+      required:
+        - id
+        - horseId
+        - horseName
+        - rank
+        - score
+        - baseConfidence
+        - confidence
+        - confidenceDelta
+        - confidenceBand
+        - resultStatus
+
+    Prediction:
+      allOf:
+        - $ref: "#/components/schemas/PredictionSummary"
+        - type: object
+          properties:
+            raceId:
+              type: integer
+            factors:
+              $ref: "#/components/schemas/PredictionFactors"
+            createdAt:
+              type: string
+            gradedAt:
+              type: ["string", "null"]
+          required:
+            - raceId
+            - factors
+            - createdAt
+
+    RaceResultSummary:
+      type: object
+      properties:
+        winnerHorseId:
+          type: integer
+        winnerHorseName:
+          type: string
+        runnerUpHorseId:
+          type: ["integer", "null"]
+        runnerUpHorseName:
+          type: ["string", "null"]
+        thirdHorseId:
+          type: ["integer", "null"]
+        thirdHorseName:
+          type: ["string", "null"]
+        recordedAt:
+          type: string
+        notes:
+          type: ["string", "null"]
+        topPickCorrect:
+          type: ["boolean", "null"]
+      required:
+        - winnerHorseId
+        - winnerHorseName
+        - recordedAt
 
     Race:
       type: object
@@ -284,6 +415,8 @@ components:
           type: integer
         raceTime:
           type: string
+        meetingDate:
+          type: ["string", "null"]
         status:
           type: string
           enum: [upcoming, analyzing, completed, cancelled]
@@ -301,6 +434,32 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        syncedFrom:
+          type: ["string", "null"]
+        isToday:
+          type: boolean
+        isThisWeek:
+          type: boolean
+        dayLabel:
+          type: string
+        minutesToRace:
+          type: ["integer", "null"]
+        forecastBand:
+          type: string
+        prominence:
+          type: number
+        topPrediction:
+          anyOf:
+            - $ref: "#/components/schemas/PredictionSummary"
+            - type: "null"
+        topPredictions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PredictionSummary"
+        result:
+          anyOf:
+            - $ref: "#/components/schemas/RaceResultSummary"
+            - type: "null"
       required:
         - id
         - raceNumber
@@ -312,56 +471,29 @@ components:
         - surface
         - horseCount
         - createdAt
+        - isToday
+        - isThisWeek
+        - dayLabel
+        - forecastBand
+        - prominence
+        - topPredictions
 
     RaceDetail:
-      type: object
-      properties:
-        id:
-          type: integer
-        raceNumber:
-          type: integer
-        name:
-          type: string
-        venue:
-          type: string
-        distance:
-          type: integer
-        raceTime:
-          type: string
-        status:
-          type: string
-        surface:
-          type: string
-        grade:
-          type: ["string", "null"]
-        prize:
-          type: ["string", "null"]
-        horses:
-          type: array
-          items:
-            $ref: "#/components/schemas/Horse"
-        predictions:
-          type: array
-          items:
-            $ref: "#/components/schemas/Prediction"
-        nextUpdateAt:
-          type: ["string", "null"]
-        lastAnalyzedAt:
-          type: ["string", "null"]
-        createdAt:
-          type: string
-      required:
-        - id
-        - raceNumber
-        - name
-        - venue
-        - distance
-        - raceTime
-        - status
-        - surface
-        - horses
-        - predictions
-        - createdAt
+      allOf:
+        - $ref: "#/components/schemas/Race"
+        - type: object
+          properties:
+            horses:
+              type: array
+              items:
+                $ref: "#/components/schemas/Horse"
+            predictions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Prediction"
+          required:
+            - horses
+            - predictions
 
     Horse:
       type: object
@@ -389,6 +521,10 @@ components:
         oddsMovement:
           type: string
           enum: [shortening, drifting, stable, unknown]
+        scratched:
+          type: boolean
+        scratchReason:
+          type: ["string", "null"]
         courseRecord:
           type: boolean
         distanceRecord:
@@ -409,67 +545,11 @@ components:
         - form
         - currentOdds
         - oddsMovement
+        - scratched
         - courseRecord
         - distanceRecord
         - trainerJockeyRecord
         - createdAt
-
-    Prediction:
-      type: object
-      properties:
-        id:
-          type: integer
-        raceId:
-          type: integer
-        horseId:
-          type: integer
-        horseName:
-          type: string
-        rank:
-          type: integer
-        score:
-          type: number
-        confidence:
-          type: number
-        factors:
-          $ref: "#/components/schemas/PredictionFactors"
-        aiSummary:
-          type: ["string", "null"]
-        createdAt:
-          type: string
-      required:
-        - id
-        - raceId
-        - horseId
-        - horseName
-        - rank
-        - score
-        - confidence
-        - factors
-        - createdAt
-
-    PredictionFactors:
-      type: object
-      properties:
-        courseForm:
-          type: number
-        formDistance:
-          type: number
-        jockeyTrainer:
-          type: number
-        oddsMovement:
-          type: number
-        history:
-          type: number
-        overall:
-          type: number
-      required:
-        - courseForm
-        - formDistance
-        - jockeyTrainer
-        - oddsMovement
-        - history
-        - overall
 
     AnalysisResult:
       type: object
@@ -549,6 +629,8 @@ components:
           type: integer
         raceTime:
           type: string
+        meetingDate:
+          type: ["string", "null"]
         surface:
           type: string
         grade:
@@ -598,6 +680,20 @@ components:
         - form
         - currentOdds
 
+    RecordRaceResultBody:
+      type: object
+      properties:
+        winnerHorseId:
+          type: integer
+        runnerUpHorseId:
+          type: ["integer", "null"]
+        thirdHorseId:
+          type: ["integer", "null"]
+        notes:
+          type: ["string", "null"]
+      required:
+        - winnerHorseId
+
     ChatMessageBody:
       type: object
       properties:
@@ -634,12 +730,115 @@ components:
         message:
           type: string
         updatedWeights:
-          $ref: "#/components/schemas/PredictionWeights"
+          anyOf:
+            - $ref: "#/components/schemas/PredictionWeights"
+            - type: "null"
         triggeredAnalysis:
           type: boolean
       required:
         - message
         - triggeredAnalysis
+
+    PerformanceResultSummary:
+      type: object
+      properties:
+        raceId:
+          type: integer
+        raceName:
+          type: string
+        meetingDate:
+          type: ["string", "null"]
+        topPickHorseName:
+          type: ["string", "null"]
+        winnerHorseName:
+          type: string
+        topPickCorrect:
+          type: boolean
+      required:
+        - raceId
+        - raceName
+        - winnerHorseName
+        - topPickCorrect
+
+    DashboardPerformanceSummary:
+      type: object
+      properties:
+        sampleSize:
+          type: integer
+        topPickWinRate:
+          type: number
+        placedRate:
+          type: number
+        averageConfidence:
+          type: number
+        confidenceBias:
+          type: number
+        factorAdjustments:
+          type: object
+          properties:
+            courseForm:
+              type: number
+            formDistance:
+              type: number
+            jockeyTrainer:
+              type: number
+            oddsMovement:
+              type: number
+            history:
+              type: number
+          required:
+            - courseForm
+            - formDistance
+            - jockeyTrainer
+            - oddsMovement
+            - history
+        strongestEdge:
+          type: ["string", "null"]
+        recentResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/PerformanceResultSummary"
+      required:
+        - sampleSize
+        - topPickWinRate
+        - placedRate
+        - averageConfidence
+        - confidenceBias
+        - factorAdjustments
+        - recentResults
+
+    WeeklyOverviewDay:
+      type: object
+      properties:
+        date:
+          type: string
+        label:
+          type: string
+        raceCount:
+          type: integer
+        analyzedCount:
+          type: integer
+        completedCount:
+          type: integer
+        venues:
+          type: array
+          items:
+            type: string
+        spotlightRaceId:
+          type: ["integer", "null"]
+        spotlightRaceName:
+          type: ["string", "null"]
+        spotlightHorseName:
+          type: ["string", "null"]
+        spotlightConfidence:
+          type: ["number", "null"]
+      required:
+        - date
+        - label
+        - raceCount
+        - analyzedCount
+        - completedCount
+        - venues
 
     DashboardSummary:
       type: object
@@ -650,7 +849,13 @@ components:
           type: integer
         upcomingRaces:
           type: integer
+        completedRaces:
+          type: integer
         totalHorses:
+          type: integer
+        todayRaceCount:
+          type: integer
+        weekRaceCount:
           type: integer
         nextRaceTime:
           type: ["string", "null"]
@@ -664,9 +869,25 @@ components:
           type: array
           items:
             type: string
+        todayCards:
+          type: array
+          items:
+            $ref: "#/components/schemas/Race"
+        weeklyOverview:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeeklyOverviewDay"
+        performance:
+          $ref: "#/components/schemas/DashboardPerformanceSummary"
       required:
         - totalRaces
         - analyzedRaces
         - upcomingRaces
+        - completedRaces
         - totalHorses
+        - todayRaceCount
+        - weekRaceCount
         - venues
+        - todayCards
+        - weeklyOverview
+        - performance

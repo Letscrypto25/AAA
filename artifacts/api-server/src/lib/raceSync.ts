@@ -1,14 +1,16 @@
 import { db, racesTable, horsesTable, syncStateTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { logger } from "./logger";
 import { fetchMeetingsForDate, meetingToRaceSlots } from "./goldcircle";
 import { generateHorseField, refreshOddsAndScratches } from "./groq";
 import { getNextUpdateTime } from "./scheduler";
+import { runRaceForecast } from "./forecasting";
+import { formatDateKey } from "./race-time";
 
 const FIELD_SIZE = 10;
 
 function todayDateStr(): string {
-  return new Date().toISOString().split("T")[0];
+  return formatDateKey(new Date());
 }
 
 async function raceExistsForSlot(venue: string, raceNumber: number, meetingDate: string): Promise<boolean> {
@@ -47,7 +49,7 @@ async function createRaceWithHorses(slot: {
       status: "upcoming",
       meetingDate: slot.meetingDate,
       syncedFrom: "goldcircle",
-      nextUpdateAt: new Date(),
+      nextUpdateAt: getNextUpdateTime(slot.time, slot.meetingDate),
     })
     .returning();
 
@@ -67,27 +69,39 @@ async function createRaceWithHorses(slot: {
     );
 
     await db.insert(horsesTable).values(
-      horses.map((h) => ({
+      horses.map((horse) => ({
         raceId: race.id,
-        name: h.name,
-        number: h.number,
-        jockey: h.jockey,
-        trainer: h.trainer,
-        form: h.form,
-        weight: h.weight,
-        currentOdds: h.currentOdds,
-        openingOdds: h.openingOdds,
-        oddsMovement: h.currentOdds < h.openingOdds ? "shortening" : h.currentOdds > h.openingOdds ? "drifting" : "stable",
-        courseRecord: h.courseRecord,
-        distanceRecord: h.distanceRecord,
-        trainerJockeyRecord: h.trainerJockeyRecord,
+        name: horse.name,
+        number: horse.number,
+        jockey: horse.jockey,
+        trainer: horse.trainer,
+        form: horse.form,
+        weight: horse.weight,
+        currentOdds: horse.currentOdds,
+        openingOdds: horse.openingOdds,
+        oddsMovement:
+          horse.currentOdds < horse.openingOdds
+            ? "shortening"
+            : horse.currentOdds > horse.openingOdds
+              ? "drifting"
+              : "stable",
+        courseRecord: horse.courseRecord,
+        distanceRecord: horse.distanceRecord,
+        trainerJockeyRecord: horse.trainerJockeyRecord,
         scratched: false,
       })),
     );
 
     logger.info({ raceId: race.id, horsesAdded: horses.length }, "Horses generated and added");
+
+    try {
+      await runRaceForecast(race.id, "sync");
+      logger.info({ raceId: race.id }, "Initial weekly forecast generated");
+    } catch (err) {
+      logger.warn({ err, raceId: race.id }, "Initial forecast generation failed after sync");
+    }
   } catch (err) {
-    logger.warn({ err, raceId: race.id }, "Failed to generate horse field — race created empty");
+    logger.warn({ err, raceId: race.id }, "Failed to generate horse field - race created empty");
   }
 
   return race.id;
@@ -97,7 +111,7 @@ export async function syncMeetingsForDate(date: Date): Promise<{ racesCreated: n
   const meetings = await fetchMeetingsForDate(date);
 
   if (meetings.length === 0) {
-    logger.info({ date: date.toISOString().split("T")[0] }, "No Gold Circle meetings found for date");
+    logger.info({ date: formatDateKey(date) }, "No Gold Circle meetings found for date");
     return { racesCreated: 0, meetingsFound: 0 };
   }
 
@@ -118,36 +132,46 @@ export async function syncMeetingsForDate(date: Date): Promise<{ racesCreated: n
   return { racesCreated, meetingsFound: meetings.length };
 }
 
+export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCreated: number; meetingsFound: number }> {
+  let racesCreated = 0;
+  let meetingsFound = 0;
+
+  for (let offset = 0; offset < days; offset++) {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    const result = await syncMeetingsForDate(date);
+    racesCreated += result.racesCreated;
+    meetingsFound += result.meetingsFound;
+  }
+
+  return { racesCreated, meetingsFound };
+}
+
 export async function syncTodaysMeetings(): Promise<void> {
-  const today = new Date();
   const dateStr = todayDateStr();
 
-  logger.info({ date: dateStr }, "Starting daily race sync");
+  logger.info({ date: dateStr }, "Starting weekly race sync");
 
   try {
-    const result = await syncMeetingsForDate(today);
+    const result = await syncUpcomingMeetings(7);
 
-    await db
-      .insert(syncStateTable)
-      .values({
-        lastSyncDate: dateStr,
-        meetingsFound: result.meetingsFound,
-        racesCreated: result.racesCreated,
-        status: "ok",
-      });
+    await db.insert(syncStateTable).values({
+      lastSyncDate: dateStr,
+      meetingsFound: result.meetingsFound,
+      racesCreated: result.racesCreated,
+      status: "ok",
+    });
 
-    logger.info(result, "Daily race sync complete");
+    logger.info(result, "Weekly race sync complete");
   } catch (err) {
-    logger.error({ err }, "Daily race sync failed");
-    await db
-      .insert(syncStateTable)
-      .values({
-        lastSyncDate: dateStr,
-        meetingsFound: 0,
-        racesCreated: 0,
-        status: "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
+    logger.error({ err }, "Weekly race sync failed");
+    await db.insert(syncStateTable).values({
+      lastSyncDate: dateStr,
+      meetingsFound: 0,
+      racesCreated: 0,
+      status: "error",
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -156,7 +180,7 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
   if (!race) return;
 
   const horses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
-  const activeHorses = horses.filter((h) => !h.scratched);
+  const activeHorses = horses.filter((horse) => !horse.scratched);
   if (activeHorses.length === 0) return;
 
   try {
@@ -168,22 +192,23 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
         surface: race.surface,
         grade: race.grade,
         raceTime: race.raceTime,
+        meetingDate: race.meetingDate,
       },
-      activeHorses.map((h) => ({
-        name: h.name,
-        number: h.number,
-        jockey: h.jockey,
-        trainer: h.trainer,
-        form: h.form,
-        currentOdds: h.currentOdds,
-        openingOdds: h.openingOdds,
-        oddsMovement: h.oddsMovement,
-        courseRecord: h.courseRecord,
-        distanceRecord: h.distanceRecord,
-        trainerJockeyRecord: h.trainerJockeyRecord,
-        notes: h.notes,
-        weight: h.weight,
-        scratched: h.scratched,
+      activeHorses.map((horse) => ({
+        name: horse.name,
+        number: horse.number,
+        jockey: horse.jockey,
+        trainer: horse.trainer,
+        form: horse.form,
+        currentOdds: horse.currentOdds,
+        openingOdds: horse.openingOdds,
+        oddsMovement: horse.oddsMovement,
+        courseRecord: horse.courseRecord,
+        distanceRecord: horse.distanceRecord,
+        trainerJockeyRecord: horse.trainerJockeyRecord,
+        notes: horse.notes,
+        weight: horse.weight,
+        scratched: horse.scratched,
       })),
     );
 
@@ -212,7 +237,7 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
       }
     }
 
-    const nextUpdateAt = getNextUpdateTime(race.raceTime);
+    const nextUpdateAt = getNextUpdateTime(race.raceTime, race.meetingDate);
     await db.update(racesTable).set({ nextUpdateAt }).where(eq(racesTable.id, raceId));
 
     logger.info({ raceId, updatesApplied: updates.length }, "Odds refreshed");
@@ -231,16 +256,16 @@ export async function getLastSyncStatus(): Promise<{
   const rows = await db
     .select()
     .from(syncStateTable)
-    .orderBy(syncStateTable.lastSyncAt)
+    .orderBy(desc(syncStateTable.lastSyncAt))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const r = rows[0];
+  const latest = rows[0];
   return {
-    lastSyncAt: r.lastSyncAt,
-    lastSyncDate: r.lastSyncDate,
-    meetingsFound: r.meetingsFound,
-    racesCreated: r.racesCreated,
-    status: r.status,
+    lastSyncAt: latest.lastSyncAt,
+    lastSyncDate: latest.lastSyncDate,
+    meetingsFound: latest.meetingsFound,
+    racesCreated: latest.racesCreated,
+    status: latest.status,
   };
 }

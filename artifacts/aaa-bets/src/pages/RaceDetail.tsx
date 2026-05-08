@@ -1,38 +1,60 @@
 import { useState } from "react";
-import { useParams, Link } from "wouter";
-import {
-  useGetRace,
-  useGetRacePredictions,
-  useGetRaceHorses,
-  useAnalyzeRace,
-  useAddHorse,
-} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  getGetRaceQueryKey,
-  getGetRacePredictionsQueryKey,
+  getGetDashboardSummaryQueryKey,
   getGetRaceHorsesQueryKey,
+  getGetRacePredictionsQueryKey,
+  getGetRaceQueryKey,
+  getGetRacesQueryKey,
+  useAddHorse,
+  useAnalyzeRace,
+  useGetRace,
+  useGetRaceHorses,
+  useGetRacePredictions,
+  useRecordRaceResult,
 } from "@workspace/api-client-react";
-import { ArrowLeft, Zap, Plus, Clock, TrendingDown, TrendingUp, Minus, RefreshCw, XCircle, Wifi } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  ArrowLeft,
+  Clock,
+  Flag,
+  Minus,
+  Plus,
+  RefreshCw,
+  TrendingDown,
+  TrendingUp,
+  Trophy,
+  Wifi,
+  XCircle,
+  Zap,
+} from "lucide-react";
+import { Link, useParams } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { formatConfidenceBand, formatMinutesToRace, formatOutcomeLabel, getOutcomeTone } from "@/lib/forecast";
+import { cn } from "@/lib/utils";
+
+type RaceHorse = {
+  id: number;
+  name: string;
+  number: number;
+  jockey: string;
+  trainer: string;
+  form?: string;
+  currentOdds: number;
+  oddsMovement: string;
+  courseRecord?: boolean;
+  distanceRecord?: boolean;
+  scratched?: boolean;
+  scratchReason?: string | null;
+};
 
 function OddsChip({ movement }: { movement: string }) {
-  if (movement === "shortening") return (
-    <span className="flex items-center gap-1 text-xs text-accent font-medium">
-      <TrendingDown className="size-3" /> Shortening
-    </span>
-  );
-  if (movement === "drifting") return (
-    <span className="flex items-center gap-1 text-xs text-destructive font-medium">
-      <TrendingUp className="size-3" /> Drifting
-    </span>
-  );
-  return (
-    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-      <Minus className="size-3" /> Stable
-    </span>
-  );
+  if (movement === "shortening") {
+    return <span className="flex items-center gap-1 text-xs font-medium text-accent"><TrendingDown className="size-3" />Shortening</span>;
+  }
+  if (movement === "drifting") {
+    return <span className="flex items-center gap-1 text-xs font-medium text-destructive"><TrendingUp className="size-3" />Drifting</span>;
+  }
+  return <span className="flex items-center gap-1 text-xs text-muted-foreground"><Minus className="size-3" />Stable</span>;
 }
 
 function ScoreBar({ value, label }: { value: number; label: string }) {
@@ -42,11 +64,8 @@ function ScoreBar({ value, label }: { value: number; label: string }) {
         <span className="text-muted-foreground">{label}</span>
         <span className="font-medium">{(value * 100).toFixed(0)}%</span>
       </div>
-      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-        <div
-          className="h-full bg-primary rounded-full transition-all duration-500"
-          style={{ width: `${value * 100}%` }}
-        />
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${value * 100}%` }} />
       </div>
     </div>
   );
@@ -54,16 +73,27 @@ function ScoreBar({ value, label }: { value: number; label: string }) {
 
 function AddHorseModal({ raceId, onClose }: { raceId: number; onClose: () => void }) {
   const { toast } = useToast();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const addHorse = useAddHorse();
   const [form, setForm] = useState({
-    name: "", number: 1, jockey: "", trainer: "",
-    form: "", weight: "", currentOdds: "", openingOdds: "",
-    courseRecord: false, distanceRecord: false, trainerJockeyRecord: "", notes: "",
+    name: "",
+    number: 1,
+    jockey: "",
+    trainer: "",
+    form: "",
+    weight: "",
+    currentOdds: "",
+    openingOdds: "",
+    courseRecord: false,
+    distanceRecord: false,
+    trainerJockeyRecord: "",
+    notes: "",
   });
+  const inputClassName = "w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+  const field = (label: string, children: React.ReactNode) => <div className="space-y-1"><label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</label>{children}</div>;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     try {
       await addHorse.mutateAsync({
         raceId,
@@ -82,8 +112,9 @@ function AddHorseModal({ raceId, onClose }: { raceId: number; onClose: () => voi
           notes: form.notes || undefined,
         },
       });
-      await qc.invalidateQueries({ queryKey: getGetRaceHorsesQueryKey(raceId) });
-      await qc.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRaceHorsesQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
       toast({ title: "Horse added", description: form.name });
       onClose();
     } catch {
@@ -91,55 +122,117 @@ function AddHorseModal({ raceId, onClose }: { raceId: number; onClose: () => voi
     }
   };
 
-  const inp = "w-full bg-input border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
-  const f = (label: string, children: React.ReactNode) => (
-    <div className="space-y-1">
-      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</label>
-      {children}
-    </div>
-  );
-
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-card border border-card-border rounded-xl shadow-2xl w-full max-w-lg my-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-card-border">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4" onClick={onClose}>
+      <div className="my-4 w-full max-w-lg rounded-xl border border-card-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-card-border px-6 py-4">
           <h2 className="font-semibold text-foreground">Add Horse</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-xl">&times;</button>
+          <button onClick={onClose} className="text-xl text-muted-foreground hover:text-foreground">&times;</button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="max-h-[70vh] space-y-4 overflow-y-auto p-6">
           <div className="grid grid-cols-2 gap-4">
-            {f("Number", <input type="number" min={1} max={30} value={form.number} onChange={(e) => setForm({ ...form, number: Number(e.target.value) })} className={inp} required />)}
-            {f("Horse Name", <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Silvano Spirit" className={inp} required />)}
+            {field("Number", <input type="number" min={1} max={30} value={form.number} onChange={(event) => setForm((current) => ({ ...current, number: Number(event.target.value) }))} className={inputClassName} required />)}
+            {field("Horse Name", <input type="text" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Silvano Spirit" className={inputClassName} required />)}
           </div>
           <div className="grid grid-cols-2 gap-4">
-            {f("Jockey", <input type="text" value={form.jockey} onChange={(e) => setForm({ ...form, jockey: e.target.value })} placeholder="e.g. C. Orffer" className={inp} required />)}
-            {f("Trainer", <input type="text" value={form.trainer} onChange={(e) => setForm({ ...form, trainer: e.target.value })} placeholder="e.g. M. de Kock" className={inp} required />)}
+            {field("Jockey", <input type="text" value={form.jockey} onChange={(event) => setForm((current) => ({ ...current, jockey: event.target.value }))} className={inputClassName} required />)}
+            {field("Trainer", <input type="text" value={form.trainer} onChange={(event) => setForm((current) => ({ ...current, trainer: event.target.value }))} className={inputClassName} required />)}
           </div>
           <div className="grid grid-cols-2 gap-4">
-            {f("Current Odds", <input type="number" step="0.1" min="1" value={form.currentOdds} onChange={(e) => setForm({ ...form, currentOdds: e.target.value })} placeholder="e.g. 3.5" className={inp} required />)}
-            {f("Opening Odds", <input type="number" step="0.1" min="1" value={form.openingOdds} onChange={(e) => setForm({ ...form, openingOdds: e.target.value })} placeholder="Optional" className={inp} />)}
+            {field("Current Odds", <input type="number" step="0.1" min="1" value={form.currentOdds} onChange={(event) => setForm((current) => ({ ...current, currentOdds: event.target.value }))} className={inputClassName} required />)}
+            {field("Opening Odds", <input type="number" step="0.1" min="1" value={form.openingOdds} onChange={(event) => setForm((current) => ({ ...current, openingOdds: event.target.value }))} className={inputClassName} />)}
           </div>
           <div className="grid grid-cols-2 gap-4">
-            {f("Form", <input type="text" value={form.form} onChange={(e) => setForm({ ...form, form: e.target.value })} placeholder="e.g. 1-2-1-3" className={inp} />)}
-            {f("Weight (kg)", <input type="number" step="0.1" value={form.weight} onChange={(e) => setForm({ ...form, weight: e.target.value })} placeholder="Optional" className={inp} />)}
+            {field("Form", <input type="text" value={form.form} onChange={(event) => setForm((current) => ({ ...current, form: event.target.value }))} className={inputClassName} />)}
+            {field("Weight (kg)", <input type="number" step="0.1" value={form.weight} onChange={(event) => setForm((current) => ({ ...current, weight: event.target.value }))} className={inputClassName} />)}
           </div>
-          {f("Trainer/Jockey Partnership Record", <input type="text" value={form.trainerJockeyRecord} onChange={(e) => setForm({ ...form, trainerJockeyRecord: e.target.value })} placeholder="e.g. 3 wins from 8 runs together" className={inp} />)}
-          {f("Notes", <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Any additional notes..." className={cn(inp, "resize-none")} rows={2} />)}
+          {field("Trainer/Jockey Partnership Record", <input type="text" value={form.trainerJockeyRecord} onChange={(event) => setForm((current) => ({ ...current, trainerJockeyRecord: event.target.value }))} className={inputClassName} />)}
+          {field("Notes", <textarea value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className={cn(inputClassName, "resize-none")} rows={2} />)}
           <div className="flex gap-6">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={form.courseRecord} onChange={(e) => setForm({ ...form, courseRecord: e.target.checked })} className="rounded" />
-              Course Record
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={form.distanceRecord} onChange={(e) => setForm({ ...form, distanceRecord: e.target.checked })} className="rounded" />
-              Distance Record
-            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" checked={form.courseRecord} onChange={(event) => setForm((current) => ({ ...current, courseRecord: event.target.checked }))} className="rounded" />Course Record</label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" checked={form.distanceRecord} onChange={(event) => setForm((current) => ({ ...current, distanceRecord: event.target.checked }))} className="rounded" />Distance Record</label>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-            <button type="submit" disabled={addHorse.isPending} className="px-5 py-2 text-sm rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90 disabled:opacity-50">
-              {addHorse.isPending ? "Adding..." : "Add Horse"}
-            </button>
+            <button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
+            <button type="submit" disabled={addHorse.isPending} className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">{addHorse.isPending ? "Adding..." : "Add Horse"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function RecordResultModal({ raceId, horses, onClose }: { raceId: number; horses: Array<{ id: number; name: string; number: number; scratched?: boolean }>; onClose: () => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const recordRaceResult = useRecordRaceResult();
+  const availableHorses = horses.filter((horse) => !horse.scratched).sort((left, right) => left.number - right.number);
+  const [winnerHorseId, setWinnerHorseId] = useState<number | undefined>(availableHorses[0]?.id);
+  const [runnerUpHorseId, setRunnerUpHorseId] = useState<number | undefined>();
+  const [thirdHorseId, setThirdHorseId] = useState<number | undefined>();
+  const [notes, setNotes] = useState("");
+  const inputClassName = "w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!winnerHorseId) {
+      toast({ title: "Winner required", description: "Select the winner before saving.", variant: "destructive" });
+      return;
+    }
+    const selections = [winnerHorseId, runnerUpHorseId, thirdHorseId].filter((value): value is number => typeof value === "number");
+    if (new Set(selections).size !== selections.length) {
+      toast({ title: "Duplicate placing", description: "Placings must be different horses.", variant: "destructive" });
+      return;
+    }
+    try {
+      await recordRaceResult.mutateAsync({
+        raceId,
+        data: {
+          winnerHorseId,
+          runnerUpHorseId: runnerUpHorseId ?? undefined,
+          thirdHorseId: thirdHorseId ?? undefined,
+          notes: notes || undefined,
+        },
+      });
+      await queryClient.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRacePredictionsQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+      await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      toast({ title: "Result recorded", description: "The race has been graded back into the model." });
+      onClose();
+    } catch {
+      toast({ title: "Result not saved", description: "Unable to record the official result.", variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-xl border border-card-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-card-border px-6 py-4">
+          <div>
+            <h2 className="font-semibold text-foreground">Record Official Result</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Save placings and grade the latest forecast.</p>
+          </div>
+          <button onClick={onClose} className="text-xl text-muted-foreground hover:text-foreground">&times;</button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+          <select value={winnerHorseId ?? ""} onChange={(event) => setWinnerHorseId(event.target.value ? Number(event.target.value) : undefined)} className={inputClassName} required>
+            {availableHorses.map((horse) => <option key={`winner-${horse.id}`} value={horse.id}>#{horse.number} {horse.name}</option>)}
+          </select>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <select value={runnerUpHorseId ?? ""} onChange={(event) => setRunnerUpHorseId(event.target.value ? Number(event.target.value) : undefined)} className={inputClassName}>
+              <option value="">Runner-up (optional)</option>
+              {availableHorses.map((horse) => <option key={`runner-${horse.id}`} value={horse.id}>#{horse.number} {horse.name}</option>)}
+            </select>
+            <select value={thirdHorseId ?? ""} onChange={(event) => setThirdHorseId(event.target.value ? Number(event.target.value) : undefined)} className={inputClassName}>
+              <option value="">Third (optional)</option>
+              {availableHorses.map((horse) => <option key={`third-${horse.id}`} value={horse.id}>#{horse.number} {horse.name}</option>)}
+            </select>
+          </div>
+          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional notes" className={cn(inputClassName, "resize-none")} rows={3} />
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
+            <button type="submit" disabled={recordRaceResult.isPending} className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">{recordRaceResult.isPending ? "Saving..." : "Save Result"}</button>
           </div>
         </form>
       </div>
@@ -150,135 +243,123 @@ function AddHorseModal({ raceId, onClose }: { raceId: number; onClose: () => voi
 export default function RaceDetail() {
   const params = useParams<{ id: string }>();
   const raceId = Number(params.id ?? "0");
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const [showAddHorse, setShowAddHorse] = useState(false);
-
+  const [showResultModal, setShowResultModal] = useState(false);
   const { data: race, isLoading } = useGetRace(raceId);
-  const { data: horses } = useGetRaceHorses(raceId);
+  const { data: horseResponse } = useGetRaceHorses(raceId);
+  const horses = ((horseResponse ?? []) as RaceHorse[]);
   const { data: predictions } = useGetRacePredictions(raceId);
   const analyzeRace = useAnalyzeRace();
+  const activeHorses = horses.filter((horse) => !horse.scratched);
+  const scratchedHorses = horses.filter((horse) => horse.scratched);
+  const sortedPredictions = [...(predictions ?? [])].sort((left, right) => left.rank - right.rank);
 
   const handleAnalyze = async () => {
     try {
       await analyzeRace.mutateAsync({ raceId });
-      await qc.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
-      await qc.invalidateQueries({ queryKey: getGetRacePredictionsQueryKey(raceId) });
-      toast({ title: "Analysis complete", description: "Predictions updated by AI" });
+      await queryClient.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRacePredictionsQueryKey(raceId) });
+      await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+      await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      toast({ title: "Forecast updated", description: "Predictions have been refreshed for this race." });
     } catch {
-      toast({ title: "Analysis failed", description: "Check your GROQ_API_KEY", variant: "destructive" });
+      toast({ title: "Analysis failed", description: "Check your GROQ_API_KEY and try again.", variant: "destructive" });
     }
   };
 
   if (isLoading) {
-    return (
-      <div className="p-6 max-w-4xl mx-auto">
-        <div className="h-8 bg-muted rounded w-48 animate-pulse mb-4" />
-        <div className="h-40 bg-card border border-card-border rounded-xl animate-pulse" />
-      </div>
-    );
+    return <div className="mx-auto max-w-4xl p-6"><div className="mb-4 h-8 w-48 animate-pulse rounded bg-muted" /><div className="h-40 animate-pulse rounded-xl border border-card-border bg-card" /></div>;
   }
 
   if (!race) {
-    return (
-      <div className="p-6 text-center">
-        <p className="text-muted-foreground">Race not found</p>
-        <Link href="/races"><span className="text-primary hover:underline cursor-pointer text-sm mt-2 block">Back to races</span></Link>
-      </div>
-    );
+    return <div className="p-6 text-center"><p className="text-muted-foreground">Race not found</p><Link href="/races"><span className="mt-2 block cursor-pointer text-sm text-primary hover:underline">Back to races</span></Link></div>;
   }
 
-  const sortedPreds = [...(predictions ?? [])].sort((a, b) => a.rank - b.rank);
-  const activeHorses = (horses ?? []).filter((h) => !(h as { scratched?: boolean }).scratched);
-  const scratchedHorses = (horses ?? []).filter((h) => (h as { scratched?: boolean }).scratched);
-
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
+    <div className="mx-auto max-w-4xl space-y-5 p-6">
       {showAddHorse && <AddHorseModal raceId={raceId} onClose={() => setShowAddHorse(false)} />}
+      {showResultModal && <RecordResultModal raceId={raceId} horses={horses} onClose={() => setShowResultModal(false)} />}
 
-      <div className="flex items-center gap-3">
-        <Link href="/races">
-          <div className="p-2 rounded-lg hover:bg-muted cursor-pointer transition-colors">
-            <ArrowLeft className="size-4 text-muted-foreground" />
-          </div>
-        </Link>
+      <div className="flex items-start gap-3">
+        <Link href="/races"><div className="cursor-pointer rounded-lg p-2 hover:bg-muted"><ArrowLeft className="size-4 text-muted-foreground" /></div></Link>
         <div className="flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold text-foreground">{race.name}</h1>
-            {race.grade && <span className="text-xs px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium">{race.grade}</span>}
-            {(race as { syncedFrom?: string }).syncedFrom === "goldcircle" && (
-              <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-medium">
-                <Wifi className="size-3" /> Auto-synced
-              </span>
-            )}
+            {race.grade && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">{race.grade}</span>}
+            {race.syncedFrom === "goldcircle" && <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-400"><Wifi className="size-3" />Auto-synced</span>}
+            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.dayLabel}</span>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{formatConfidenceBand(race.forecastBand)}</span>
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1"><Clock className="size-3" />{race.raceTime}</span>
             <span>{race.venue}</span>
             <span>{race.distance}m {race.surface}</span>
-            {race.prize && <span className="text-primary font-medium">{race.prize}</span>}
+            <span>{formatMinutesToRace(race.minutesToRace)}</span>
+            {race.prize && <span className="font-medium text-primary">{race.prize}</span>}
           </div>
         </div>
-        <button
-          onClick={handleAnalyze}
-          disabled={analyzeRace.isPending || activeHorses.length === 0}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
-        >
-          {analyzeRace.isPending ? <RefreshCw className="size-4 animate-spin" /> : <Zap className="size-4" />}
-          {analyzeRace.isPending ? "Analyzing..." : "Analyze"}
-        </button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {!race.result && <button onClick={() => setShowResultModal(true)} disabled={activeHorses.length === 0} className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"><Flag className="size-4" />Record Result</button>}
+          <button onClick={handleAnalyze} disabled={analyzeRace.isPending || activeHorses.length === 0} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
+            {analyzeRace.isPending ? <RefreshCw className="size-4 animate-spin" /> : <Zap className="size-4" />}
+            {analyzeRace.isPending ? "Analyzing..." : "Analyze"}
+          </button>
+        </div>
       </div>
 
-      {sortedPreds.length > 0 && (
-        <div className="bg-card border border-card-border rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-card-border">
-            <h2 className="font-semibold text-foreground">AI Predictions</h2>
-            {race.lastAnalyzedAt && (
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Last analyzed {new Date(race.lastAnalyzedAt).toLocaleString()}
-                {race.nextUpdateAt && ` · Next update ${new Date(race.nextUpdateAt).toLocaleTimeString()}`}
-              </p>
-            )}
+      {race.result && (
+        <div className="rounded-xl border border-card-border bg-card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-foreground">Official Result</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Recorded {new Date(race.result.recordedAt).toLocaleString()}</p>
+            </div>
+            {race.result.topPickCorrect !== null && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", race.result.topPickCorrect ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300")}>{race.result.topPickCorrect ? "Top pick hit" : "Top pick missed"}</span>}
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-muted/60 p-3"><p className="text-xs uppercase tracking-wide text-muted-foreground">Winner</p><p className="mt-1 font-semibold text-foreground">{race.result.winnerHorseName}</p></div>
+            <div className="rounded-xl bg-muted/60 p-3"><p className="text-xs uppercase tracking-wide text-muted-foreground">Runner-up</p><p className="mt-1 font-semibold text-foreground">{race.result.runnerUpHorseName ?? "-"}</p></div>
+            <div className="rounded-xl bg-muted/60 p-3"><p className="text-xs uppercase tracking-wide text-muted-foreground">Third</p><p className="mt-1 font-semibold text-foreground">{race.result.thirdHorseName ?? "-"}</p></div>
+          </div>
+          {race.result.notes && <div className="mt-3 rounded-xl border border-border bg-background/70 px-3 py-2.5 text-sm text-muted-foreground">{race.result.notes}</div>}
+        </div>
+      )}
+
+      {sortedPredictions.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-card-border bg-card">
+          <div className="border-b border-card-border px-5 py-4">
+            <h2 className="font-semibold text-foreground">Forecast Rankings</h2>
+            {race.lastAnalyzedAt && <p className="mt-0.5 text-xs text-muted-foreground">Last analyzed {new Date(race.lastAnalyzedAt).toLocaleString()}{race.nextUpdateAt && ` | Next update ${new Date(race.nextUpdateAt).toLocaleTimeString()}`}</p>}
           </div>
           <div className="divide-y divide-border">
-            {sortedPreds.map((pred, i) => {
-              const horse = (horses ?? []).find((h) => h.id === pred.horseId);
-              const factors = pred.factors as unknown as Record<string, number>;
+            {sortedPredictions.map((prediction, index) => {
+              const horse = horses.find((currentHorse) => currentHorse.id === prediction.horseId);
+              const factors = prediction.factors as unknown as Record<string, number>;
+              const outcomeLabel = formatOutcomeLabel(prediction.resultStatus, prediction.finishPosition);
               return (
-                <div key={pred.id} className={cn("px-5 py-4", i === 0 && "bg-primary/5")}>
+                <div key={prediction.id} className={cn("px-5 py-4", index === 0 && "bg-primary/5")}>
                   <div className="flex items-start gap-4">
-                    <div className={cn(
-                      "size-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0",
-                      i === 0 && "bg-primary text-primary-foreground",
-                      i === 1 && "bg-muted-foreground/20 text-foreground",
-                      i === 2 && "bg-amber-900/30 text-amber-400",
-                      i > 2 && "bg-muted text-muted-foreground text-xs",
-                    )}>
-                      {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${pred.rank}`}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-bold", index === 0 && "bg-primary text-primary-foreground", index === 1 && "bg-muted-foreground/20 text-foreground", index === 2 && "bg-amber-900/30 text-amber-400", index > 2 && "bg-muted text-muted-foreground")}>{index + 1}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <p className="font-semibold text-foreground">{pred.horseName || horse?.name}</p>
-                          {horse && (
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              #{horse.number} · {horse.jockey} / {horse.trainer} · {horse.currentOdds}
-                            </p>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-foreground">{prediction.horseName || horse?.name}</p>
+                            {index === 0 && <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"><Trophy className="size-3" />Top pick</span>}
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{formatConfidenceBand(prediction.confidenceBand)}</span>
+                            {outcomeLabel && <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", getOutcomeTone(prediction.resultStatus))}>{outcomeLabel}</span>}
+                          </div>
+                          {horse && <p className="mt-0.5 text-xs text-muted-foreground">#{horse.number} | {horse.jockey} / {horse.trainer} | Odds {horse.currentOdds}</p>}
                         </div>
                         <div className="text-right">
-                          <p className="text-lg font-bold text-primary">{(pred.score * 100).toFixed(0)}pts</p>
-                          <p className="text-xs text-muted-foreground">{(pred.confidence * 100).toFixed(0)}% confidence</p>
+                          <p className="text-lg font-bold text-primary">{(prediction.score * 100).toFixed(0)}pts</p>
+                          <p className="text-xs text-muted-foreground">{(prediction.confidence * 100).toFixed(0)}% confidence{prediction.confidenceDelta !== 0 && ` | ${prediction.confidenceDelta > 0 ? "+" : ""}${(prediction.confidenceDelta * 100).toFixed(0)} delta`}</p>
                         </div>
                       </div>
-                      {pred.aiSummary && <p className="text-sm text-muted-foreground mt-2 italic">{pred.aiSummary}</p>}
-                      {factors && Object.keys(factors).length > 0 && (
-                        <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
-                          {Object.entries(factors).filter(([k]) => k !== "overall").map(([key, val]) => (
-                            <ScoreBar key={key} label={key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())} value={val} />
-                          ))}
-                        </div>
-                      )}
+                      {prediction.aiSummary && <p className="mt-2 text-sm italic text-muted-foreground">{prediction.aiSummary}</p>}
+                      {factors && Object.keys(factors).length > 0 && <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">{Object.entries(factors).filter(([key]) => key !== "overall").map(([key, value]) => <ScoreBar key={key} label={key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase())} value={value} />)}</div>}
                     </div>
                   </div>
                 </div>
@@ -288,66 +369,35 @@ export default function RaceDetail() {
         </div>
       )}
 
-      <div className="bg-card border border-card-border rounded-xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-card-border">
-          <h2 className="font-semibold text-foreground">
-            Runners ({activeHorses.length}
-            {scratchedHorses.length > 0 && <span className="text-destructive"> · {scratchedHorses.length} scratched</span>})
-          </h2>
-          <button
-            onClick={() => setShowAddHorse(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/70 text-sm font-medium transition-colors"
-          >
-            <Plus className="size-3.5" /> Add Horse
-          </button>
+      <div className="overflow-hidden rounded-xl border border-card-border bg-card">
+        <div className="flex items-center justify-between border-b border-card-border px-5 py-4">
+          <h2 className="font-semibold text-foreground">Runners ({activeHorses.length}){scratchedHorses.length > 0 && <span className="ml-2 text-destructive">| {scratchedHorses.length} scratched</span>}</h2>
+          <button onClick={() => setShowAddHorse(true)} className="flex items-center gap-1.5 rounded-lg bg-muted px-3 py-1.5 text-sm font-medium hover:bg-muted/70"><Plus className="size-3.5" />Add Horse</button>
         </div>
-        {(horses ?? []).length === 0 ? (
+        {horses.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-muted-foreground text-sm">No horses added yet.</p>
-            <button onClick={() => setShowAddHorse(true)} className="mt-3 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
-              Add First Horse
-            </button>
+            <p className="text-sm text-muted-foreground">No horses added yet.</p>
+            <button onClick={() => setShowAddHorse(true)} className="mt-3 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Add First Horse</button>
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {[...(horses ?? [])].sort((a, b) => a.number - b.number).map((horse) => {
-              const isScratched = (horse as { scratched?: boolean }).scratched;
-              const scratchReason = (horse as { scratchReason?: string }).scratchReason;
-              return (
-                <div key={horse.id} className={cn("px-5 py-3.5 flex items-center gap-4", isScratched && "opacity-50")}>
-                  <div className={cn(
-                    "size-8 rounded-full flex items-center justify-center shrink-0",
-                    isScratched ? "bg-destructive/15" : "bg-muted",
-                  )}>
-                    {isScratched
-                      ? <XCircle className="size-4 text-destructive" />
-                      : <span className="text-xs font-bold text-muted-foreground">#{horse.number}</span>
-                    }
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className={cn("font-medium text-sm", isScratched ? "line-through text-muted-foreground" : "text-foreground")}>
-                        {horse.name}
-                      </p>
-                      {isScratched && <span className="text-xs bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-medium">SCRATCHED</span>}
-                      {!isScratched && horse.courseRecord && <span className="text-xs bg-accent/15 text-accent px-1.5 py-0.5 rounded">Course</span>}
-                      {!isScratched && horse.distanceRecord && <span className="text-xs bg-blue-500/15 text-blue-400 px-1.5 py-0.5 rounded">Distance</span>}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {horse.jockey} / {horse.trainer}
-                      {horse.form && ` · Form: ${horse.form}`}
-                      {isScratched && scratchReason && ` · ${scratchReason}`}
-                    </p>
-                  </div>
-                  {!isScratched && (
-                    <div className="text-right shrink-0">
-                      <p className="font-semibold text-sm text-foreground">{horse.currentOdds}</p>
-                      <OddsChip movement={horse.oddsMovement} />
-                    </div>
-                  )}
+            {[...horses].sort((left, right) => left.number - right.number).map((horse) => (
+              <div key={horse.id} className={cn("flex items-center gap-4 px-5 py-3.5", horse.scratched && "opacity-50")}>
+                <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", horse.scratched ? "bg-destructive/15" : "bg-muted")}>
+                  {horse.scratched ? <XCircle className="size-4 text-destructive" /> : <span className="text-xs font-bold text-muted-foreground">#{horse.number}</span>}
                 </div>
-              );
-            })}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className={cn("text-sm font-medium", horse.scratched ? "line-through text-muted-foreground" : "text-foreground")}>{horse.name}</p>
+                    {horse.scratched && <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-xs font-medium text-destructive">SCRATCHED</span>}
+                    {!horse.scratched && horse.courseRecord && <span className="rounded bg-accent/15 px-1.5 py-0.5 text-xs text-accent">Course</span>}
+                    {!horse.scratched && horse.distanceRecord && <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-xs text-blue-400">Distance</span>}
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{horse.jockey} / {horse.trainer}{horse.form && ` | Form: ${horse.form}`}{horse.scratched && horse.scratchReason && ` | ${horse.scratchReason}`}</p>
+                </div>
+                {!horse.scratched && <div className="shrink-0 text-right"><p className="text-sm font-semibold text-foreground">{horse.currentOdds}</p><OddsChip movement={horse.oddsMovement} /></div>}
+              </div>
+            ))}
           </div>
         )}
       </div>

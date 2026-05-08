@@ -1,15 +1,16 @@
 import Groq from "groq-sdk";
 import { logger } from "./logger";
+import { getMinutesToRace } from "./race-time";
 
 const MODEL = "llama-3.3-70b-versatile";
 
-let _client: Groq | null = null;
+let client: Groq | null = null;
 
 export function getGroqClient(): Groq {
   const apiKey = process.env["GROQ_API_KEY"];
   if (!apiKey) throw new Error("GROQ_API_KEY is not set");
-  if (!_client) _client = new Groq({ apiKey });
-  return _client;
+  if (!client) client = new Groq({ apiKey });
+  return client;
 }
 
 export interface HorseData {
@@ -36,6 +37,7 @@ export interface RaceData {
   surface: string;
   grade?: string | null;
   raceTime: string;
+  meetingDate?: string | null;
 }
 
 export interface WeightConfig {
@@ -85,25 +87,59 @@ export interface OddsUpdate {
 }
 
 const SA_JOCKEYS = [
-  "A. Marcus", "G. Lerena", "R. Fourie", "C. Zackey", "L. Hewitson",
-  "S. Zungu", "W. Kennedy", "L. Ferraris", "M. Yeni", "R. Veira",
-  "G. van Niekerk", "C. Orffer", "C. Murray", "S. Moodley", "A. Domeyer",
-  "K. Nkosi", "S. Septoo", "B. Fayd'herbe", "P. Strydom",
+  "A. Marcus",
+  "G. Lerena",
+  "R. Fourie",
+  "C. Zackey",
+  "L. Hewitson",
+  "S. Zungu",
+  "W. Kennedy",
+  "L. Ferraris",
+  "M. Yeni",
+  "R. Veira",
+  "G. van Niekerk",
+  "C. Orffer",
+  "C. Murray",
+  "S. Moodley",
+  "A. Domeyer",
+  "K. Nkosi",
+  "S. Septoo",
+  "B. Fayd'herbe",
+  "P. Strydom",
 ];
 
 const SA_TRAINERS = [
-  "M. de Kock", "C. Bass-Robinson", "J. Snaith", "P. Peter", "S. Tarry",
-  "D. Kannemeyer", "J. Ramsden", "W. Marwing", "A. Marcus", "G. Kotzen",
-  "G. Woodruff", "D. Nieuwenhuizen", "C. Laird", "G. van Zyl", "N. Grove",
-  "M. Gabb", "R. Budagh", "F. Robinson",
+  "M. de Kock",
+  "C. Bass-Robinson",
+  "J. Snaith",
+  "P. Peter",
+  "S. Tarry",
+  "D. Kannemeyer",
+  "J. Ramsden",
+  "W. Marwing",
+  "A. Marcus",
+  "G. Kotzen",
+  "G. Woodruff",
+  "D. Nieuwenhuizen",
+  "C. Laird",
+  "G. van Zyl",
+  "N. Grove",
+  "M. Gabb",
+  "R. Budagh",
+  "F. Robinson",
 ];
 
 export async function generateHorseField(
-  race: { name: string; venue: string; distance: number; surface: string; raceNumber: number; meetingDate?: string },
+  race: {
+    name: string;
+    venue: string;
+    distance: number;
+    surface: string;
+    raceNumber: number;
+    meetingDate?: string;
+  },
   fieldSize: number = 10,
 ): Promise<GeneratedHorse[]> {
-  const client = getGroqClient();
-
   const prompt = `You are an expert South African horse racing analyst. Generate a realistic field of ${fieldSize} horses for this race.
 
 Race: ${race.name}
@@ -141,7 +177,7 @@ Respond with ONLY valid JSON:
   ]
 }`;
 
-  const response = await client.chat.completions.create({
+  const response = await getGroqClient().chat.completions.create({
     model: MODEL,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.8,
@@ -156,23 +192,21 @@ Respond with ONLY valid JSON:
 }
 
 export async function refreshOddsAndScratches(
-  race: RaceData & { raceTime: string },
+  race: RaceData,
   horses: HorseData[],
 ): Promise<OddsUpdate[]> {
-  const client = getGroqClient();
-
-  const now = new Date();
-  const [h, m] = race.raceTime.split(":").map(Number);
-  const raceMs = new Date().setHours(h, m, 0, 0);
-  const minsToRace = Math.round((raceMs - now.getTime()) / 60000);
-
+  const minsToRace = getMinutesToRace(race.raceTime, race.meetingDate) ?? 0;
   const horseList = horses
-    .map((h, i) => `${i}: ${h.name} (${h.number}) - Jockey: ${h.jockey} - Current: ${h.currentOdds} - Scratched: ${h.scratched ?? false}`)
+    .map(
+      (horse, index) =>
+        `${index}: ${horse.name} (${horse.number}) - Jockey: ${horse.jockey} - Current: ${horse.currentOdds} - Scratched: ${horse.scratched ?? false}`,
+    )
     .join("\n");
 
   const prompt = `You are a South African racing market analyst. Update the odds for this race.
 
 Race: ${race.name} at ${race.venue}, ${race.distance}m, ${race.raceTime}
+Date: ${race.meetingDate ?? "today"}
 Time until race: ${minsToRace > 0 ? `${minsToRace} minutes` : "race has passed"}
 
 Current runners:
@@ -192,7 +226,7 @@ Respond with ONLY valid JSON:
   ]
 }`;
 
-  const response = await client.chat.completions.create({
+  const response = await getGroqClient().chat.completions.create({
     model: MODEL,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.4,
@@ -211,22 +245,23 @@ export async function analyzeRaceWithAI(
   horses: HorseData[],
   weights: WeightConfig,
 ): Promise<HorsePrediction[]> {
-  const client = getGroqClient();
-
-  const activeHorses = horses.filter((h) => !h.scratched);
+  const activeHorses = horses.filter((horse) => !horse.scratched);
   if (activeHorses.length === 0) return [];
 
-  const horseDescriptions = activeHorses.map((h, i) =>
-    `${i + 1}. ${h.name} (#${h.number})
-   - Jockey: ${h.jockey}, Trainer: ${h.trainer}
-   - Form: ${h.form || "Unknown"}
-   - Odds: ${h.currentOdds} (Opening: ${h.openingOdds ?? "N/A"}, Movement: ${h.oddsMovement})
-   - Course Record: ${h.courseRecord ? "Yes" : "No"}
-   - Distance Record: ${h.distanceRecord ? "Yes" : "No"}
-   - Trainer/Jockey Partnership: ${h.trainerJockeyRecord || "Unknown"}
-   - Weight: ${h.weight ?? "Unknown"}
-   ${h.notes ? `- Notes: ${h.notes}` : ""}`,
-  ).join("\n\n");
+  const horseDescriptions = activeHorses
+    .map(
+      (horse, index) =>
+        `${index + 1}. ${horse.name} (#${horse.number})
+   - Jockey: ${horse.jockey}, Trainer: ${horse.trainer}
+   - Form: ${horse.form || "Unknown"}
+   - Odds: ${horse.currentOdds} (Opening: ${horse.openingOdds ?? "N/A"}, Movement: ${horse.oddsMovement})
+   - Course Record: ${horse.courseRecord ? "Yes" : "No"}
+   - Distance Record: ${horse.distanceRecord ? "Yes" : "No"}
+   - Trainer/Jockey Partnership: ${horse.trainerJockeyRecord || "Unknown"}
+   - Weight: ${horse.weight ?? "Unknown"}
+   ${horse.notes ? `- Notes: ${horse.notes}` : ""}`,
+    )
+    .join("\n\n");
 
   const prompt = `You are an expert horse racing analyst. Analyze this race and score each horse.
 
@@ -236,6 +271,7 @@ Distance: ${race.distance}m
 Surface: ${race.surface}
 Grade: ${race.grade ?? "Open"}
 Time: ${race.raceTime}
+Date: ${race.meetingDate ?? "today"}
 
 HORSES:
 ${horseDescriptions}
@@ -262,7 +298,7 @@ Respond with ONLY valid JSON:
   ]
 }`;
 
-  const response = await client.chat.completions.create({
+  const response = await getGroqClient().chat.completions.create({
     model: MODEL,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
@@ -274,11 +310,10 @@ Respond with ONLY valid JSON:
   if (!jsonMatch) throw new Error("No JSON found in response");
   const parsed = JSON.parse(jsonMatch[0]) as { predictions: HorsePrediction[] };
 
-  const allHorses = horses;
-  return parsed.predictions.map((p) => {
-    const activeHorse = activeHorses[p.horseIndex];
-    const realIndex = activeHorse ? allHorses.findIndex((h) => h.name === activeHorse.name) : p.horseIndex;
-    return { ...p, horseIndex: realIndex >= 0 ? realIndex : p.horseIndex };
+  return parsed.predictions.map((prediction) => {
+    const activeHorse = activeHorses[prediction.horseIndex];
+    const realIndex = activeHorse ? horses.findIndex((horse) => horse.name === activeHorse.name) : prediction.horseIndex;
+    return { ...prediction, horseIndex: realIndex >= 0 ? realIndex : prediction.horseIndex };
   });
 }
 
@@ -296,35 +331,35 @@ export async function chatWithAI(
   chatHistory: Array<{ role: "user" | "assistant"; content: string }>,
   raceDayBriefing?: string,
 ): Promise<{ reply: string; weightSuggestions?: ChatWeightSuggestion }> {
-  const client = getGroqClient();
-
-  const systemPrompt = `You are AAA Bets — an expert South African horse racing analyst and AI betting advisor. You have full visibility of today's complete race card, including every runner, jockey, trainer, form, live odds, odds movement, AI prediction scores, and any scratched horses.
+  const systemPrompt = `You are AAA Bets - an expert South African horse racing analyst and AI betting advisor. You have full visibility of today's card, the coming week, recent graded results, live odds movement, and the model's current hit rate.
 
 ## YOUR CAPABILITIES
-- **Race analysis**: Break down any race, compare the field, identify value bets and dangers
-- **Best bet selection**: Give a confident single best bet or each-way selection with clear reasoning
-- **Jockey/trainer intelligence**: Know which SA jockeys and trainers are in form, which partnerships fire
-- **Odds reading**: Interpret market moves — shortening horses (↓) show market confidence, drifters (↑) suggest trouble
-- **Weight adjustment**: Optimise the 5 prediction factors for the day's conditions (wet track, sprint vs staying races, etc.)
-- **Scratch impact**: Assess how a scratch affects the remaining field and revise selections
-- **Form analysis**: Read SA form figures (1=win, 2=2nd, 3=3rd, 0=unplaced) and contextualise them
+- Race analysis: Break down any race, compare the field, identify value bets and dangers
+- Best bet selection: Give a confident single best bet or each-way selection with clear reasoning
+- Jockey and trainer intelligence: Know which SA jockeys and trainers are in form and which partnerships fire
+- Odds reading: Interpret market moves - shortening horses show market confidence, drifters suggest trouble
+- Weight adjustment: Optimise the 5 prediction factors for the card conditions
+- Scratch impact: Assess how a scratch affects the remaining field and revise selections
+- Weekly planning: Compare today's card with the next 7 days and explain where confidence is strongest
+- Model review: Mention recent hits or misses when that changes how aggressive the advice should be
 
 ## CURRENT PREDICTION WEIGHTS
-- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% — how well this horse performs at this specific venue
-- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% — recent runs + suitability for today's trip
-- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% — quality of the booking and partnership record
-- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% — market intelligence (shortening = confidence)
-- History: ${(currentWeights.history * 100).toFixed(0)}% — overall career record at this level
+- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% - venue suitability
+- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% - recent runs plus trip suitability
+- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% - booking strength and partnership
+- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% - market intelligence
+- History: ${(currentWeights.history * 100).toFixed(0)}% - class and historical level
 
-## TODAY'S RACE CARD DATA
-${raceDayBriefing ?? "No race data loaded yet — tell the user to click Sync on the Dashboard."}
+## FORECAST CONTEXT
+${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on the Dashboard."}
 
 ## HOW TO RESPOND
-- Be direct, confident, and specific — name horses, quote odds, cite form figures
+- Be direct, confident, and specific - name horses, quote odds, cite form figures
 - When giving a best bet, format it clearly: **BEST BET: [Horse Name] @ [odds] in Race [N]**
-- For multi-race days, rank the races by confidence (most predictable first)
-- When suggesting weight changes (e.g. "heavy track — course form matters more"), include the weights tag
-- Keep responses focused — don't pad. If a user asks for one bet, give one bet with tight reasoning
+- For multi-race or multi-day asks, rank the races by confidence and explain why one card is stronger than another
+- Mention if the model was recently right or wrong when that matters
+- When suggesting weight changes, include the weights tag
+- Keep responses focused - do not pad
 - Use SA racing terminology: "the favourite", "each-way", "trifecta", "the rail", "outside draw"
 
 ## WEIGHT ADJUSTMENT
@@ -333,11 +368,11 @@ When you recommend changing weights, append this block (and ONLY when actually c
 Weights must sum to exactly 1.0.`;
 
   const messages = [
-    ...chatHistory.slice(-8).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    ...chatHistory.slice(-8).map((entry) => ({ role: entry.role, content: entry.content })),
     { role: "user" as const, content: message },
   ];
 
-  const response = await client.chat.completions.create({
+  const response = await getGroqClient().chat.completions.create({
     model: MODEL,
     messages: [{ role: "system", content: systemPrompt }, ...messages],
     temperature: 0.7,
@@ -346,8 +381,8 @@ Weights must sum to exactly 1.0.`;
 
   const content = response.choices[0]?.message?.content ?? "I couldn't process that request.";
   const weightsMatch = content.match(/<weights>([\s\S]*?)<\/weights>/);
-  let weightSuggestions: ChatWeightSuggestion | undefined;
   const reply = content.replace(/<weights>[\s\S]*?<\/weights>/g, "").trim();
+  let weightSuggestions: ChatWeightSuggestion | undefined;
 
   if (weightsMatch) {
     try {

@@ -1,50 +1,55 @@
 import { Router } from "express";
-import { db, racesTable, horsesTable, predictionsTable, predictionWeightsTable } from "@workspace/db";
-import { eq, count } from "drizzle-orm";
+import { db, racesTable, horsesTable, predictionsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import {
-  GetRacesQueryParams,
-  CreateRaceBody,
-  GetRaceParams,
-  GetRaceHorsesParams,
-  AddHorseParams,
   AddHorseBody,
+  AddHorseParams,
   AnalyzeRaceParams,
+  CreateRaceBody,
+  GetRaceHorsesParams,
+  GetRaceParams,
+  GetRacesQueryParams,
 } from "@workspace/api-zod";
-import { analyzeRaceWithAI } from "../lib/groq";
 import { getNextUpdateTime } from "../lib/scheduler";
+import { runRaceForecast, recordRaceResult } from "../lib/forecasting";
+import { buildRaceForecastCards } from "../lib/race-insights";
 
 const router = Router();
+
+async function loadRacePredictions(raceId: number) {
+  const horses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
+  const predictions = await db
+    .select()
+    .from(predictionsTable)
+    .where(eq(predictionsTable.raceId, raceId))
+    .orderBy(predictionsTable.rank);
+
+  const horseNameById = new Map(horses.map((horse) => [horse.id, horse.name]));
+
+  return predictions.map((prediction) => ({
+    ...prediction,
+    horseName: horseNameById.get(prediction.horseId) ?? "",
+    factors: prediction.factors,
+    createdAt: prediction.createdAt.toISOString(),
+    gradedAt: prediction.gradedAt?.toISOString() ?? null,
+  }));
+}
 
 router.get("/races", async (req, res): Promise<void> => {
   const query = GetRacesQueryParams.safeParse(req.query);
   const filters = query.success ? query.data : {};
 
-  let rows = await db.select().from(racesTable).orderBy(racesTable.raceTime);
+  let rows = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
 
   if (filters.venue) {
-    rows = rows.filter((r) => r.venue.toLowerCase().includes(filters.venue!.toLowerCase()));
+    rows = rows.filter((race) => race.venue.toLowerCase().includes(filters.venue!.toLowerCase()));
   }
   if (filters.status) {
-    rows = rows.filter((r) => r.status === filters.status);
+    rows = rows.filter((race) => race.status === filters.status);
   }
 
-  const horseCounts = await db
-    .select({ raceId: horsesTable.raceId, count: count() })
-    .from(horsesTable)
-    .groupBy(horsesTable.raceId);
-
-  const countMap = new Map(horseCounts.map((h) => [h.raceId, Number(h.count)]));
-
-  const result = rows.map((r) => ({
-    ...r,
-    horseCount: countMap.get(r.id) ?? 0,
-    raceTime: r.raceTime,
-    nextUpdateAt: r.nextUpdateAt?.toISOString() ?? null,
-    lastAnalyzedAt: r.lastAnalyzedAt?.toISOString() ?? null,
-    createdAt: r.createdAt.toISOString(),
-  }));
-
-  res.json(result);
+  const cards = await buildRaceForecastCards(rows);
+  res.json(cards);
 });
 
 router.post("/races", async (req, res): Promise<void> => {
@@ -53,6 +58,11 @@ router.post("/races", async (req, res): Promise<void> => {
     res.status(400).json({ error: body.error.message });
     return;
   }
+
+  const meetingDate =
+    typeof req.body?.meetingDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.meetingDate)
+      ? req.body.meetingDate
+      : null;
 
   const [race] = await db
     .insert(racesTable)
@@ -65,18 +75,14 @@ router.post("/races", async (req, res): Promise<void> => {
       surface: body.data.surface,
       grade: body.data.grade ?? null,
       prize: body.data.prize ?? null,
+      meetingDate,
       status: "upcoming",
-      nextUpdateAt: new Date(),
+      nextUpdateAt: getNextUpdateTime(body.data.raceTime, meetingDate),
     })
     .returning();
 
-  res.status(201).json({
-    ...race,
-    horseCount: 0,
-    nextUpdateAt: race.nextUpdateAt?.toISOString() ?? null,
-    lastAnalyzedAt: null,
-    createdAt: race.createdAt.toISOString(),
-  });
+  const [card] = await buildRaceForecastCards([race]);
+  res.status(201).json(card);
 });
 
 router.get("/races/:raceId", async (req, res): Promise<void> => {
@@ -86,35 +92,42 @@ router.get("/races/:raceId", async (req, res): Promise<void> => {
     return;
   }
 
-  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId));
+  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId)).limit(1);
   if (!race) {
     res.status(404).json({ error: "Race not found" });
     return;
   }
 
-  const horses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, race.id));
-
-  const rawPreds = await db
+  const horses = await db
     .select()
-    .from(predictionsTable)
-    .where(eq(predictionsTable.raceId, race.id))
-    .orderBy(predictionsTable.rank);
-
-  const predictions = rawPreds.map((p) => ({
-    ...p,
-    horseName: horses.find((h) => h.id === p.horseId)?.name ?? "",
-    factors: p.factors as Record<string, number>,
-    createdAt: p.createdAt.toISOString(),
-  }));
+    .from(horsesTable)
+    .where(eq(horsesTable.raceId, race.id))
+    .orderBy(horsesTable.number);
+  const predictions = await loadRacePredictions(race.id);
+  const [card] = await buildRaceForecastCards([race]);
 
   res.json({
-    ...race,
-    horses: horses.map((h) => ({ ...h, createdAt: h.createdAt.toISOString() })),
+    ...card,
+    horses: horses.map((horse) => ({ ...horse, createdAt: horse.createdAt.toISOString() })),
     predictions,
-    nextUpdateAt: race.nextUpdateAt?.toISOString() ?? null,
-    lastAnalyzedAt: race.lastAnalyzedAt?.toISOString() ?? null,
-    createdAt: race.createdAt.toISOString(),
   });
+});
+
+router.get("/races/:raceId/predictions", async (req, res): Promise<void> => {
+  const params = GetRaceParams.safeParse({ raceId: Number(req.params.raceId) });
+  if (!params.success) {
+    res.status(400).json({ error: "Invalid raceId" });
+    return;
+  }
+
+  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId)).limit(1);
+  if (!race) {
+    res.status(404).json({ error: "Race not found" });
+    return;
+  }
+
+  const predictions = await loadRacePredictions(race.id);
+  res.json(predictions);
 });
 
 router.get("/races/:raceId/horses", async (req, res): Promise<void> => {
@@ -130,7 +143,7 @@ router.get("/races/:raceId/horses", async (req, res): Promise<void> => {
     .where(eq(horsesTable.raceId, params.data.raceId))
     .orderBy(horsesTable.number);
 
-  res.json(horses.map((h) => ({ ...h, createdAt: h.createdAt.toISOString() })));
+  res.json(horses.map((horse) => ({ ...horse, createdAt: horse.createdAt.toISOString() })));
 });
 
 router.post("/races/:raceId/horses", async (req, res): Promise<void> => {
@@ -146,7 +159,7 @@ router.post("/races/:raceId/horses", async (req, res): Promise<void> => {
     return;
   }
 
-  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId));
+  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId)).limit(1);
   if (!race) {
     res.status(404).json({ error: "Race not found" });
     return;
@@ -191,115 +204,68 @@ router.post("/races/:raceId/analyze", async (req, res): Promise<void> => {
     return;
   }
 
-  const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId));
-  if (!race) {
-    res.status(404).json({ error: "Race not found" });
-    return;
-  }
-
-  const horses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, race.id));
-  if (horses.length === 0) {
-    res.status(400).json({ error: "No horses in this race" });
-    return;
-  }
-
-  const [weightsRow] = await db.select().from(predictionWeightsTable).limit(1);
-  const weights = weightsRow ?? {
-    courseForm: 0.25,
-    formDistance: 0.25,
-    jockeyTrainer: 0.20,
-    oddsMovement: 0.15,
-    history: 0.15,
-  };
-
-  let aiPredictions;
   try {
-    aiPredictions = await analyzeRaceWithAI(
-      {
-        name: race.name,
-        venue: race.venue,
-        distance: race.distance,
-        surface: race.surface,
-        grade: race.grade,
-        raceTime: race.raceTime,
-      },
-      horses.map((h) => ({
-        name: h.name,
-        number: h.number,
-        jockey: h.jockey,
-        trainer: h.trainer,
-        form: h.form,
-        currentOdds: h.currentOdds,
-        openingOdds: h.openingOdds,
-        oddsMovement: h.oddsMovement,
-        courseRecord: h.courseRecord,
-        distanceRecord: h.distanceRecord,
-        trainerJockeyRecord: h.trainerJockeyRecord,
-        notes: h.notes,
-        weight: h.weight,
-      })),
-      weights,
-    );
+    const result = await runRaceForecast(params.data.raceId, "manual");
+    const predictions = await loadRacePredictions(params.data.raceId);
+
+    res.json({
+      raceId: params.data.raceId,
+      predictions,
+      analyzedAt: result.analyzedAt,
+      nextUpdateAt: result.nextUpdateAt,
+    });
   } catch (err) {
-    req.log.warn({ err }, "AI analysis failed, using fallback scoring");
-    aiPredictions = horses.map((h, i) => ({
-      horseIndex: i,
-      score: Math.max(0.1, 1 / (h.currentOdds + 1)),
-      confidence: 0.4,
-      factors: {
-        courseForm: 0.5,
-        formDistance: 0.5,
-        jockeyTrainer: 0.5,
-        oddsMovement: 0.5,
-        history: 0.5,
-        overall: 0.5,
-      },
-      aiSummary: "AI analysis unavailable — scored by odds.",
-    }));
+    const message = err instanceof Error ? err.message : "Race analysis failed";
+    const status = message === "Race not found" ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post("/races/:raceId/result", async (req, res): Promise<void> => {
+  const params = GetRaceParams.safeParse({ raceId: Number(req.params.raceId) });
+  if (!params.success) {
+    res.status(400).json({ error: "Invalid raceId" });
+    return;
   }
 
-  await db.delete(predictionsTable).where(eq(predictionsTable.raceId, race.id));
+  const winnerHorseId = Number(req.body?.winnerHorseId);
+  const runnerUpHorseId = req.body?.runnerUpHorseId == null ? null : Number(req.body.runnerUpHorseId);
+  const thirdHorseId = req.body?.thirdHorseId == null ? null : Number(req.body.thirdHorseId);
+  const notes = typeof req.body?.notes === "string" ? req.body.notes : null;
 
-  const sorted = [...aiPredictions].sort((a, b) => b.score - a.score);
-  const rankMap = new Map(sorted.map((p, i) => [p.horseIndex, i + 1]));
+  if (!Number.isInteger(winnerHorseId) || winnerHorseId <= 0) {
+    res.status(400).json({ error: "winnerHorseId is required" });
+    return;
+  }
+  if (runnerUpHorseId !== null && (!Number.isInteger(runnerUpHorseId) || runnerUpHorseId <= 0)) {
+    res.status(400).json({ error: "runnerUpHorseId must be a positive integer" });
+    return;
+  }
+  if (thirdHorseId !== null && (!Number.isInteger(thirdHorseId) || thirdHorseId <= 0)) {
+    res.status(400).json({ error: "thirdHorseId must be a positive integer" });
+    return;
+  }
 
-  const inserted = await db
-    .insert(predictionsTable)
-    .values(
-      aiPredictions.map((p) => ({
-        raceId: race.id,
-        horseId: horses[p.horseIndex].id,
-        rank: rankMap.get(p.horseIndex) ?? 99,
-        score: p.score,
-        confidence: p.confidence,
-        factors: p.factors,
-        aiSummary: p.aiSummary,
-      })),
-    )
-    .returning();
+  try {
+    await recordRaceResult(params.data.raceId, {
+      winnerHorseId,
+      runnerUpHorseId,
+      thirdHorseId,
+      notes,
+    });
+    const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId)).limit(1);
+    if (!race) {
+      res.status(404).json({ error: "Race not found" });
+      return;
+    }
 
-  const nextUpdateAt = getNextUpdateTime(race.raceTime);
-
-  await db
-    .update(racesTable)
-    .set({ status: "analyzing", lastAnalyzedAt: new Date(), nextUpdateAt })
-    .where(eq(racesTable.id, race.id));
-
-  const predictions = inserted
-    .map((p) => ({
-      ...p,
-      horseName: horses.find((h) => h.id === p.horseId)?.name ?? "",
-      factors: p.factors as Record<string, number>,
-      createdAt: p.createdAt.toISOString(),
-    }))
-    .sort((a, b) => a.rank - b.rank);
-
-  res.json({
-    raceId: race.id,
-    predictions,
-    analyzedAt: new Date().toISOString(),
-    nextUpdateAt: nextUpdateAt.toISOString(),
-  });
+    const [card] = await buildRaceForecastCards([race]);
+    res.status(201).json(card.result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Result recording failed";
+    const status = message === "Race not found" ? 404 : message === "Result already recorded" ? 409 : 400;
+    res.status(status).json({ error: message });
+  }
 });
 
 export default router;

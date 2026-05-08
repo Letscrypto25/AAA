@@ -7,107 +7,111 @@ import {
   horsesTable,
   predictionsTable,
 } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { SendChatMessageBody } from "@workspace/api-zod";
 import { chatWithAI } from "../lib/groq";
+import { buildRaceForecastCards, buildWeeklyOverview, getLearningPerformanceSummary } from "../lib/race-insights";
 
 const router = Router();
 
-function todayStr(): string {
-  return new Date().toISOString().split("T")[0];
+function oddsLabel(movement: string): string {
+  if (movement === "shortening") return "SHORTENING";
+  if (movement === "drifting") return "DRIFTING";
+  return "STABLE";
 }
 
-function oddsArrow(movement: string): string {
-  if (movement === "shortening") return "↓";
-  if (movement === "drifting") return "↑";
-  return "→";
-}
-
-async function buildRaceDayBriefing(focusRaceId?: number): Promise<string> {
-  const today = todayStr();
-
-  const allRaces = await db
-    .select()
-    .from(racesTable)
-    .orderBy(racesTable.raceTime);
-
-  const todaysRaces = allRaces.filter(
-    (r) => r.meetingDate === today || r.status === "upcoming" || r.status === "analyzing",
-  );
-
-  if (todaysRaces.length === 0) return "No races loaded for today.";
-
+async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
+  const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
+  const cards = await buildRaceForecastCards(allRaces);
+  const performance = await getLearningPerformanceSummary();
   const allHorses = await db.select().from(horsesTable);
-  const allPreds = await db
-    .select()
-    .from(predictionsTable)
-    .orderBy(predictionsTable.rank);
+  const allPredictions = await db.select().from(predictionsTable).orderBy(predictionsTable.rank);
 
   const horseMap = new Map<number, typeof allHorses>();
-  const predMap = new Map<number, typeof allPreds>();
+  const predictionMap = new Map<number, typeof allPredictions>();
 
-  for (const h of allHorses) {
-    const list = horseMap.get(h.raceId) ?? [];
-    list.push(h);
-    horseMap.set(h.raceId, list);
-  }
-  for (const p of allPreds) {
-    const list = predMap.get(p.raceId) ?? [];
-    list.push(p);
-    predMap.set(p.raceId, list);
+  for (const horse of allHorses) {
+    const list = horseMap.get(horse.raceId) ?? [];
+    list.push(horse);
+    horseMap.set(horse.raceId, list);
   }
 
-  const venues = [...new Set(todaysRaces.map((r) => r.venue))];
-  const lines: string[] = [
-    `TODAY'S RACE CARD — ${venues.join(" & ")} | ${new Date().toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`,
-    `Total races: ${todaysRaces.length}`,
-    "",
-  ];
+  for (const prediction of allPredictions) {
+    const list = predictionMap.get(prediction.raceId) ?? [];
+    list.push(prediction);
+    predictionMap.set(prediction.raceId, list);
+  }
 
-  for (const race of todaysRaces) {
-    const isFocus = focusRaceId === race.id;
-    const horses = (horseMap.get(race.id) ?? []).sort((a, b) => a.number - b.number);
-    const preds = predMap.get(race.id) ?? [];
-    const activeHorses = horses.filter((h) => !h.scratched);
-    const scratchedHorses = horses.filter((h) => h.scratched);
+  const todayCards = cards.filter((card) => card.isToday).sort((left, right) => {
+    const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+    const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+    return leftMinutes - rightMinutes;
+  });
+  const weeklyOverview = buildWeeklyOverview(cards);
+  const focusCard = focusRaceId ? cards.find((card) => card.id === focusRaceId) : todayCards[0];
 
-    lines.push(`${isFocus ? ">>> " : ""}RACE ${race.raceNumber} — ${race.raceTime} | ${race.distance}m ${race.surface}${race.grade ? ` | Grade: ${race.grade}` : ""}${isFocus ? " [FOCUS]" : ""}`);
-    lines.push(`  Venue: ${race.venue} | Status: ${race.status}${race.lastAnalyzedAt ? ` | Analyzed: ${new Date(race.lastAnalyzedAt).toLocaleTimeString("en-ZA")}` : " | Not yet analyzed"}`);
+  const lines: string[] = [];
+  lines.push("AAA BETS FORECAST CONTEXT");
+  lines.push(
+    `TODAY: ${todayCards.length} races loaded | WEEK: ${cards.filter((card) => card.isThisWeek).length} races across ${weeklyOverview.length} days`,
+  );
+  lines.push(
+    `MODEL: ${Math.round(performance.topPickWinRate * 100)}% win | ${Math.round(performance.placedRate * 100)}% place | ${Math.round(performance.averageConfidence * 100)}% avg confidence | bias ${performance.confidenceBias >= 0 ? "+" : ""}${performance.confidenceBias.toFixed(2)}`,
+  );
+  if (performance.strongestEdge) {
+    lines.push(`LEARNED EDGE: ${performance.strongestEdge}`);
+  }
+  if (performance.recentResults.length > 0) {
+    lines.push(
+      `RECENT RESULTS: ${performance.recentResults
+        .map((result) => `${result.raceName} ${result.topPickCorrect ? "HIT" : "MISS"} (${result.topPickHorseName ?? "no pick"} -> ${result.winnerHorseName})`)
+        .join(" | ")}`,
+    );
+  }
+  lines.push("");
 
-    if (activeHorses.length > 0) {
-      lines.push(`  Runners (${activeHorses.length}):`);
-      for (const h of activeHorses) {
-        const pred = preds.find((p) => p.horseId === h.id);
-        const scoreStr = pred ? ` | AI: #${pred.rank} ${(pred.score * 100).toFixed(0)}pts (${(pred.confidence * 100).toFixed(0)}% conf)` : "";
-        const recordStr = [h.courseRecord && "course record", h.distanceRecord && "dist record"].filter(Boolean).join(", ");
+  if (todayCards.length === 0) {
+    lines.push("TODAY CARD: no current-day races are loaded yet.");
+  } else {
+    lines.push("TODAY CARD:");
+    for (const card of todayCards.slice(0, 8)) {
+      lines.push(
+        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}% ${card.topPrediction.confidenceBand}` : "forecast pending"}`,
+      );
+      if (card.result) {
         lines.push(
-          `    #${h.number} ${h.name} — ${h.jockey} / ${h.trainer}` +
-          ` | Form: ${h.form || "unknown"} | Odds: ${h.currentOdds}${oddsArrow(h.oddsMovement)}` +
-          (h.openingOdds && h.openingOdds !== h.currentOdds ? ` (was ${h.openingOdds})` : "") +
-          (h.weight ? ` | ${h.weight}kg` : "") +
-          (recordStr ? ` | ${recordStr}` : "") +
-          (h.trainerJockeyRecord ? ` | TJ: ${h.trainerJockeyRecord}` : "") +
-          scoreStr,
+          `  Result: ${card.result.winnerHorseName}${card.result.topPickCorrect === true ? " (top pick hit)" : card.result.topPickCorrect === false ? " (top pick missed)" : ""}`,
         );
-        if (pred?.aiSummary) {
-          lines.push(`      → "${pred.aiSummary}"`);
-        }
       }
     }
+  }
 
-    if (scratchedHorses.length > 0) {
-      lines.push(`  Scratched: ${scratchedHorses.map((h) => `${h.name}${h.scratchReason ? ` (${h.scratchReason})` : ""}`).join(", ")}`);
-    }
+  lines.push("");
+  lines.push("WEEK AHEAD:");
+  for (const day of weeklyOverview.slice(0, 7)) {
+    lines.push(
+      `- ${day.label}: ${day.raceCount} races at ${day.venues.join(", ")} | spotlight ${day.spotlightRaceName ?? "none"}${day.spotlightHorseName ? ` -> ${day.spotlightHorseName} ${Math.round((day.spotlightConfidence ?? 0) * 100)}%` : ""}`,
+    );
+  }
 
-    if (preds.length > 0) {
-      const top3 = preds.slice(0, 3).map((p) => {
-        const h = horses.find((x) => x.id === p.horseId);
-        return h ? `${h.name} (${(p.score * 100).toFixed(0)}pts)` : "";
-      }).filter(Boolean);
-      lines.push(`  AI Top 3: ${top3.join(" | ")}`);
-    }
+  if (focusCard) {
+    const horses = (horseMap.get(focusCard.id) ?? []).sort((left, right) => left.number - right.number);
+    const predictions = (predictionMap.get(focusCard.id) ?? []).sort((left, right) => left.rank - right.rank);
 
     lines.push("");
+    lines.push(
+      `FOCUS RACE: Race ${focusCard.raceNumber} ${focusCard.name} | ${focusCard.venue} ${focusCard.raceTime} | ${focusCard.distance}m ${focusCard.surface} | status ${focusCard.status}`,
+    );
+
+    for (const horse of horses) {
+      const prediction = predictions.find((item) => item.horseId === horse.id);
+      lines.push(
+        `- #${horse.number} ${horse.name} | ${horse.jockey}/${horse.trainer} | form ${horse.form || "unknown"} | odds ${horse.currentOdds} ${oddsLabel(horse.oddsMovement)}${prediction ? ` | AI #${prediction.rank} ${Math.round(prediction.score * 100)}pts ${Math.round(prediction.confidence * 100)}%` : ""}${horse.scratched ? " | SCRATCHED" : ""}`,
+      );
+      if (prediction?.aiSummary) {
+        lines.push(`  Note: ${prediction.aiSummary}`);
+      }
+    }
   }
 
   return lines.join("\n");
@@ -118,12 +122,12 @@ router.get("/chat/history", async (_req, res): Promise<void> => {
     .select()
     .from(chatMessagesTable)
     .orderBy(desc(chatMessagesTable.createdAt))
-    .limit(50);
+    .limit(60);
 
   res.json(
-    messages.reverse().map((m) => ({
-      ...m,
-      createdAt: m.createdAt.toISOString(),
+    messages.reverse().map((message) => ({
+      ...message,
+      createdAt: message.createdAt.toISOString(),
     })),
   );
 });
@@ -141,7 +145,7 @@ router.post("/chat", async (req, res): Promise<void> => {
   if (!weights) {
     [weights] = await db
       .insert(predictionWeightsTable)
-      .values({ courseForm: 0.25, formDistance: 0.25, jockeyTrainer: 0.20, oddsMovement: 0.15, history: 0.15 })
+      .values({ courseForm: 0.25, formDistance: 0.25, jockeyTrainer: 0.2, oddsMovement: 0.15, history: 0.15 })
       .returning();
   }
 
@@ -149,14 +153,14 @@ router.post("/chat", async (req, res): Promise<void> => {
     .select()
     .from(chatMessagesTable)
     .orderBy(desc(chatMessagesTable.createdAt))
-    .limit(12);
+    .limit(16);
 
-  const history = recentHistory.reverse().map((m) => ({
-    role: m.role as "user" | "assistant",
-    content: m.content,
+  const history = recentHistory.reverse().map((chatMessage) => ({
+    role: chatMessage.role as "user" | "assistant",
+    content: chatMessage.content,
   }));
 
-  const raceDayBriefing = await buildRaceDayBriefing(raceId);
+  const raceDayBriefing = await buildForecastBriefing(raceId ?? undefined);
 
   await db.insert(chatMessagesTable).values({
     role: "user",
@@ -182,21 +186,21 @@ router.post("/chat", async (req, res): Promise<void> => {
 
   let updatedWeights = null;
   if (aiResult.weightSuggestions) {
-    const s = aiResult.weightSuggestions;
-    const newWeights = {
-      courseForm: s.courseForm ?? weights.courseForm,
-      formDistance: s.formDistance ?? weights.formDistance,
-      jockeyTrainer: s.jockeyTrainer ?? weights.jockeyTrainer,
-      oddsMovement: s.oddsMovement ?? weights.oddsMovement,
-      history: s.history ?? weights.history,
+    const suggestions = aiResult.weightSuggestions;
+    const nextWeights = {
+      courseForm: suggestions.courseForm ?? weights.courseForm,
+      formDistance: suggestions.formDistance ?? weights.formDistance,
+      jockeyTrainer: suggestions.jockeyTrainer ?? weights.jockeyTrainer,
+      oddsMovement: suggestions.oddsMovement ?? weights.oddsMovement,
+      history: suggestions.history ?? weights.history,
     };
-    const total = Object.values(newWeights).reduce((a, b) => a + b, 0);
+    const total = Object.values(nextWeights).reduce((sum, value) => sum + value, 0);
     if (Math.abs(total - 1.0) < 0.05) {
-      const [w] = await db
+      const [updated] = await db
         .update(predictionWeightsTable)
-        .set({ ...newWeights, updatedAt: new Date() })
+        .set({ ...nextWeights, updatedAt: new Date() })
         .returning();
-      updatedWeights = w ? { ...w, updatedAt: w.updatedAt.toISOString() } : null;
+      updatedWeights = updated ? { ...updated, updatedAt: updated.updatedAt.toISOString() } : null;
     }
   }
 

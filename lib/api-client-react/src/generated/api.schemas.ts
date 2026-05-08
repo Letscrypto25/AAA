@@ -18,6 +18,52 @@ export const RaceStatus = {
   cancelled: "cancelled",
 } as const;
 
+export interface PredictionFactors {
+  courseForm: number;
+  formDistance: number;
+  jockeyTrainer: number;
+  oddsMovement: number;
+  history: number;
+  overall: number;
+}
+
+export interface PredictionSummary {
+  id: number;
+  horseId: number;
+  horseName: string;
+  rank: number;
+  score: number;
+  baseConfidence: number;
+  confidence: number;
+  confidenceDelta: number;
+  confidenceBand: string;
+  /** @nullable */
+  timeToRaceMinutes?: number | null;
+  resultStatus: string;
+  /** @nullable */
+  finishPosition?: number | null;
+  /** @nullable */
+  aiSummary?: string | null;
+}
+
+export interface RaceResultSummary {
+  winnerHorseId: number;
+  winnerHorseName: string;
+  /** @nullable */
+  runnerUpHorseId?: number | null;
+  /** @nullable */
+  runnerUpHorseName?: string | null;
+  /** @nullable */
+  thirdHorseId?: number | null;
+  /** @nullable */
+  thirdHorseName?: string | null;
+  recordedAt: string;
+  /** @nullable */
+  notes?: string | null;
+  /** @nullable */
+  topPickCorrect?: boolean | null;
+}
+
 export interface Race {
   id: number;
   raceNumber: number;
@@ -25,6 +71,8 @@ export interface Race {
   venue: string;
   distance: number;
   raceTime: string;
+  /** @nullable */
+  meetingDate?: string | null;
   status: RaceStatus;
   surface: string;
   /** @nullable */
@@ -37,6 +85,20 @@ export interface Race {
   /** @nullable */
   lastAnalyzedAt?: string | null;
   createdAt: string;
+  /** @nullable */
+  syncedFrom?: string | null;
+  isToday: boolean;
+  isThisWeek: boolean;
+  dayLabel: string;
+  /** @nullable */
+  minutesToRace?: number | null;
+  forecastBand: string;
+  prominence: number;
+  /** @nullable */
+  topPrediction?: PredictionSummary | null;
+  topPredictions: PredictionSummary[];
+  /** @nullable */
+  result?: RaceResultSummary | null;
 }
 
 export type HorseOddsMovement =
@@ -63,6 +125,9 @@ export interface Horse {
   /** @nullable */
   openingOdds?: number | null;
   oddsMovement: HorseOddsMovement;
+  scratched: boolean;
+  /** @nullable */
+  scratchReason?: string | null;
   courseRecord: boolean;
   distanceRecord: boolean;
   trainerJockeyRecord: string;
@@ -71,49 +136,17 @@ export interface Horse {
   createdAt: string;
 }
 
-export interface PredictionFactors {
-  courseForm: number;
-  formDistance: number;
-  jockeyTrainer: number;
-  oddsMovement: number;
-  history: number;
-  overall: number;
-}
-
-export interface Prediction {
-  id: number;
+export interface Prediction extends PredictionSummary {
   raceId: number;
-  horseId: number;
-  horseName: string;
-  rank: number;
-  score: number;
-  confidence: number;
   factors: PredictionFactors;
-  /** @nullable */
-  aiSummary?: string | null;
   createdAt: string;
+  /** @nullable */
+  gradedAt?: string | null;
 }
 
-export interface RaceDetail {
-  id: number;
-  raceNumber: number;
-  name: string;
-  venue: string;
-  distance: number;
-  raceTime: string;
-  status: string;
-  surface: string;
-  /** @nullable */
-  grade?: string | null;
-  /** @nullable */
-  prize?: string | null;
+export interface RaceDetail extends Race {
   horses: Horse[];
   predictions: Prediction[];
-  /** @nullable */
-  nextUpdateAt?: string | null;
-  /** @nullable */
-  lastAnalyzedAt?: string | null;
-  createdAt: string;
 }
 
 export interface AnalysisResult {
@@ -147,6 +180,8 @@ export interface CreateRaceBody {
   venue: string;
   distance: number;
   raceTime: string;
+  /** @nullable */
+  meetingDate?: string | null;
   surface: string;
   /** @nullable */
   grade?: string | null;
@@ -168,6 +203,16 @@ export interface CreateHorseBody {
   courseRecord?: boolean;
   distanceRecord?: boolean;
   trainerJockeyRecord?: string;
+  /** @nullable */
+  notes?: string | null;
+}
+
+export interface RecordRaceResultBody {
+  winnerHorseId: number;
+  /** @nullable */
+  runnerUpHorseId?: number | null;
+  /** @nullable */
+  thirdHorseId?: number | null;
   /** @nullable */
   notes?: string | null;
 }
@@ -201,11 +246,54 @@ export interface ChatResponse {
   triggeredAnalysis: boolean;
 }
 
+export interface PerformanceResultSummary {
+  raceId: number;
+  raceName: string;
+  /** @nullable */
+  meetingDate?: string | null;
+  /** @nullable */
+  topPickHorseName?: string | null;
+  winnerHorseName: string;
+  topPickCorrect: boolean;
+}
+
+export interface DashboardPerformanceSummary {
+  sampleSize: number;
+  topPickWinRate: number;
+  placedRate: number;
+  averageConfidence: number;
+  confidenceBias: number;
+  factorAdjustments: PredictionFactors;
+  /** @nullable */
+  strongestEdge?: string | null;
+  recentResults: PerformanceResultSummary[];
+}
+
+export interface WeeklyOverviewDay {
+  date: string;
+  label: string;
+  raceCount: number;
+  analyzedCount: number;
+  completedCount: number;
+  venues: string[];
+  /** @nullable */
+  spotlightRaceId?: number | null;
+  /** @nullable */
+  spotlightRaceName?: string | null;
+  /** @nullable */
+  spotlightHorseName?: string | null;
+  /** @nullable */
+  spotlightConfidence?: number | null;
+}
+
 export interface DashboardSummary {
   totalRaces: number;
   analyzedRaces: number;
   upcomingRaces: number;
+  completedRaces: number;
   totalHorses: number;
+  todayRaceCount: number;
+  weekRaceCount: number;
   /** @nullable */
   nextRaceTime?: string | null;
   /** @nullable */
@@ -215,6 +303,9 @@ export interface DashboardSummary {
   /** @nullable */
   topPickRace?: string | null;
   venues: string[];
+  todayCards: Race[];
+  weeklyOverview: WeeklyOverviewDay[];
+  performance: DashboardPerformanceSummary;
 }
 
 export type GetRacesParams = {
