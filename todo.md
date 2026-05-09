@@ -14,3 +14,5 @@
 - 2026-05-09: Created `todo.md` and started Railway crash investigation.
 - 2026-05-09: Found Railway healthcheck mismatch (`/api/health` vs actual `/api/healthz`) and fixed `railway.json`.
 - 2026-05-09: Set `.env` `PORT=8080` for platform-compatible default while Railway still binds runtime `process.env.PORT`.
+- 2026-05-09: Merged `origin/main` into local `main` to resolve divergence and unrelated histories.
+- 2026-05-09: Attempted to push to `origin/main`, but encountered a 403 Permission Denied error for `Letscrypto25`.
