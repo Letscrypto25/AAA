@@ -15,7 +15,7 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
- * @summary Get today's races
+ * @summary Get races with weekly forecast context
  */
 export const GetRacesQueryParams = zod.object({
   venue: zod.coerce.string().optional(),
@@ -29,6 +29,7 @@ export const GetRacesResponseItem = zod.object({
   venue: zod.string(),
   distance: zod.number(),
   raceTime: zod.string(),
+  meetingDate: zod.string().nullish(),
   status: zod.enum(["upcoming", "analyzing", "completed", "cancelled"]),
   surface: zod.string(),
   grade: zod.string().nullish(),
@@ -37,11 +38,71 @@ export const GetRacesResponseItem = zod.object({
   nextUpdateAt: zod.string().nullish(),
   lastAnalyzedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  syncedFrom: zod.string().nullish(),
+  isToday: zod.boolean(),
+  isThisWeek: zod.boolean(),
+  dayLabel: zod.string(),
+  minutesToRace: zod.number().nullish(),
+  forecastBand: zod.string(),
+  prominence: zod.number(),
+  topPrediction: zod
+    .union([
+      zod.object({
+        id: zod.number(),
+        horseId: zod.number(),
+        horseName: zod.string(),
+        rank: zod.number(),
+        score: zod.number(),
+        baseConfidence: zod.number(),
+        confidence: zod.number(),
+        confidenceDelta: zod.number(),
+        confidenceBand: zod.string(),
+        timeToRaceMinutes: zod.number().nullish(),
+        resultStatus: zod.string(),
+        finishPosition: zod.number().nullish(),
+        aiSummary: zod.string().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
+  topPredictions: zod.array(
+    zod.object({
+      id: zod.number(),
+      horseId: zod.number(),
+      horseName: zod.string(),
+      rank: zod.number(),
+      score: zod.number(),
+      baseConfidence: zod.number(),
+      confidence: zod.number(),
+      confidenceDelta: zod.number(),
+      confidenceBand: zod.string(),
+      timeToRaceMinutes: zod.number().nullish(),
+      resultStatus: zod.string(),
+      finishPosition: zod.number().nullish(),
+      aiSummary: zod.string().nullish(),
+    }),
+  ),
+  result: zod
+    .union([
+      zod.object({
+        winnerHorseId: zod.number(),
+        winnerHorseName: zod.string(),
+        runnerUpHorseId: zod.number().nullish(),
+        runnerUpHorseName: zod.string().nullish(),
+        thirdHorseId: zod.number().nullish(),
+        thirdHorseName: zod.string().nullish(),
+        recordedAt: zod.string(),
+        notes: zod.string().nullish(),
+        topPickCorrect: zod.boolean().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
 });
 export const GetRacesResponse = zod.array(GetRacesResponseItem);
 
 /**
- * @summary Create a race (manual entry)
+ * @summary Create a race
  */
 export const CreateRaceBody = zod.object({
   raceNumber: zod.number(),
@@ -49,6 +110,7 @@ export const CreateRaceBody = zod.object({
   venue: zod.string(),
   distance: zod.number(),
   raceTime: zod.string(),
+  meetingDate: zod.string().nullish(),
   surface: zod.string(),
   grade: zod.string().nullish(),
   prize: zod.string().nullish(),
@@ -61,62 +123,148 @@ export const GetRaceParams = zod.object({
   raceId: zod.coerce.number(),
 });
 
-export const GetRaceResponse = zod.object({
-  id: zod.number(),
-  raceNumber: zod.number(),
-  name: zod.string(),
-  venue: zod.string(),
-  distance: zod.number(),
-  raceTime: zod.string(),
-  status: zod.string(),
-  surface: zod.string(),
-  grade: zod.string().nullish(),
-  prize: zod.string().nullish(),
-  horses: zod.array(
-    zod.object({
-      id: zod.number(),
-      raceId: zod.number(),
-      name: zod.string(),
-      number: zod.number(),
-      jockey: zod.string(),
-      trainer: zod.string(),
-      form: zod.string(),
-      weight: zod.number().nullish(),
-      currentOdds: zod.number(),
-      openingOdds: zod.number().nullish(),
-      oddsMovement: zod.enum(["shortening", "drifting", "stable", "unknown"]),
-      courseRecord: zod.boolean(),
-      distanceRecord: zod.boolean(),
-      trainerJockeyRecord: zod.string(),
-      notes: zod.string().nullish(),
-      createdAt: zod.string(),
-    }),
-  ),
-  predictions: zod.array(
-    zod.object({
-      id: zod.number(),
-      raceId: zod.number(),
-      horseId: zod.number(),
-      horseName: zod.string(),
-      rank: zod.number(),
-      score: zod.number(),
-      confidence: zod.number(),
-      factors: zod.object({
-        courseForm: zod.number(),
-        formDistance: zod.number(),
-        jockeyTrainer: zod.number(),
-        oddsMovement: zod.number(),
-        history: zod.number(),
-        overall: zod.number(),
+export const GetRaceResponse = zod
+  .object({
+    id: zod.number(),
+    raceNumber: zod.number(),
+    name: zod.string(),
+    venue: zod.string(),
+    distance: zod.number(),
+    raceTime: zod.string(),
+    meetingDate: zod.string().nullish(),
+    status: zod.enum(["upcoming", "analyzing", "completed", "cancelled"]),
+    surface: zod.string(),
+    grade: zod.string().nullish(),
+    prize: zod.string().nullish(),
+    horseCount: zod.number(),
+    nextUpdateAt: zod.string().nullish(),
+    lastAnalyzedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+    syncedFrom: zod.string().nullish(),
+    isToday: zod.boolean(),
+    isThisWeek: zod.boolean(),
+    dayLabel: zod.string(),
+    minutesToRace: zod.number().nullish(),
+    forecastBand: zod.string(),
+    prominence: zod.number(),
+    topPrediction: zod
+      .union([
+        zod.object({
+          id: zod.number(),
+          horseId: zod.number(),
+          horseName: zod.string(),
+          rank: zod.number(),
+          score: zod.number(),
+          baseConfidence: zod.number(),
+          confidence: zod.number(),
+          confidenceDelta: zod.number(),
+          confidenceBand: zod.string(),
+          timeToRaceMinutes: zod.number().nullish(),
+          resultStatus: zod.string(),
+          finishPosition: zod.number().nullish(),
+          aiSummary: zod.string().nullish(),
+        }),
+        zod.null(),
+      ])
+      .optional(),
+    topPredictions: zod.array(
+      zod.object({
+        id: zod.number(),
+        horseId: zod.number(),
+        horseName: zod.string(),
+        rank: zod.number(),
+        score: zod.number(),
+        baseConfidence: zod.number(),
+        confidence: zod.number(),
+        confidenceDelta: zod.number(),
+        confidenceBand: zod.string(),
+        timeToRaceMinutes: zod.number().nullish(),
+        resultStatus: zod.string(),
+        finishPosition: zod.number().nullish(),
+        aiSummary: zod.string().nullish(),
       }),
-      aiSummary: zod.string().nullish(),
-      createdAt: zod.string(),
+    ),
+    result: zod
+      .union([
+        zod.object({
+          winnerHorseId: zod.number(),
+          winnerHorseName: zod.string(),
+          runnerUpHorseId: zod.number().nullish(),
+          runnerUpHorseName: zod.string().nullish(),
+          thirdHorseId: zod.number().nullish(),
+          thirdHorseName: zod.string().nullish(),
+          recordedAt: zod.string(),
+          notes: zod.string().nullish(),
+          topPickCorrect: zod.boolean().nullish(),
+        }),
+        zod.null(),
+      ])
+      .optional(),
+  })
+  .and(
+    zod.object({
+      horses: zod.array(
+        zod.object({
+          id: zod.number(),
+          raceId: zod.number(),
+          name: zod.string(),
+          number: zod.number(),
+          jockey: zod.string(),
+          trainer: zod.string(),
+          form: zod.string(),
+          weight: zod.number().nullish(),
+          currentOdds: zod.number(),
+          openingOdds: zod.number().nullish(),
+          oddsMovement: zod.enum([
+            "shortening",
+            "drifting",
+            "stable",
+            "unknown",
+          ]),
+          scratched: zod.boolean(),
+          scratchReason: zod.string().nullish(),
+          courseRecord: zod.boolean(),
+          distanceRecord: zod.boolean(),
+          trainerJockeyRecord: zod.string(),
+          notes: zod.string().nullish(),
+          createdAt: zod.string(),
+        }),
+      ),
+      predictions: zod.array(
+        zod
+          .object({
+            id: zod.number(),
+            horseId: zod.number(),
+            horseName: zod.string(),
+            rank: zod.number(),
+            score: zod.number(),
+            baseConfidence: zod.number(),
+            confidence: zod.number(),
+            confidenceDelta: zod.number(),
+            confidenceBand: zod.string(),
+            timeToRaceMinutes: zod.number().nullish(),
+            resultStatus: zod.string(),
+            finishPosition: zod.number().nullish(),
+            aiSummary: zod.string().nullish(),
+          })
+          .and(
+            zod.object({
+              raceId: zod.number(),
+              factors: zod.object({
+                courseForm: zod.number(),
+                formDistance: zod.number(),
+                jockeyTrainer: zod.number(),
+                oddsMovement: zod.number(),
+                history: zod.number(),
+                overall: zod.number(),
+              }),
+              createdAt: zod.string(),
+              gradedAt: zod.string().nullish(),
+            }),
+          ),
+      ),
     }),
-  ),
-  nextUpdateAt: zod.string().nullish(),
-  lastAnalyzedAt: zod.string().nullish(),
-  createdAt: zod.string(),
-});
+  );
 
 /**
  * @summary Get horses in a race
@@ -137,6 +285,8 @@ export const GetRaceHorsesResponseItem = zod.object({
   currentOdds: zod.number(),
   openingOdds: zod.number().nullish(),
   oddsMovement: zod.enum(["shortening", "drifting", "stable", "unknown"]),
+  scratched: zod.boolean(),
+  scratchReason: zod.string().nullish(),
   courseRecord: zod.boolean(),
   distanceRecord: zod.boolean(),
   trainerJockeyRecord: zod.string(),
@@ -168,53 +318,31 @@ export const AddHorseBody = zod.object({
 });
 
 /**
- * @summary Get predictions for a race
+ * @summary Get persisted predictions for a race
  */
 export const GetRacePredictionsParams = zod.object({
   raceId: zod.coerce.number(),
 });
 
-export const GetRacePredictionsResponseItem = zod.object({
-  id: zod.number(),
-  raceId: zod.number(),
-  horseId: zod.number(),
-  horseName: zod.string(),
-  rank: zod.number(),
-  score: zod.number(),
-  confidence: zod.number(),
-  factors: zod.object({
-    courseForm: zod.number(),
-    formDistance: zod.number(),
-    jockeyTrainer: zod.number(),
-    oddsMovement: zod.number(),
-    history: zod.number(),
-    overall: zod.number(),
-  }),
-  aiSummary: zod.string().nullish(),
-  createdAt: zod.string(),
-});
-export const GetRacePredictionsResponse = zod.array(
-  GetRacePredictionsResponseItem,
-);
-
-/**
- * @summary Trigger AI analysis for a race
- */
-export const AnalyzeRaceParams = zod.object({
-  raceId: zod.coerce.number(),
-});
-
-export const AnalyzeRaceResponse = zod.object({
-  raceId: zod.number(),
-  predictions: zod.array(
+export const GetRacePredictionsResponseItem = zod
+  .object({
+    id: zod.number(),
+    horseId: zod.number(),
+    horseName: zod.string(),
+    rank: zod.number(),
+    score: zod.number(),
+    baseConfidence: zod.number(),
+    confidence: zod.number(),
+    confidenceDelta: zod.number(),
+    confidenceBand: zod.string(),
+    timeToRaceMinutes: zod.number().nullish(),
+    resultStatus: zod.string(),
+    finishPosition: zod.number().nullish(),
+    aiSummary: zod.string().nullish(),
+  })
+  .and(
     zod.object({
-      id: zod.number(),
       raceId: zod.number(),
-      horseId: zod.number(),
-      horseName: zod.string(),
-      rank: zod.number(),
-      score: zod.number(),
-      confidence: zod.number(),
       factors: zod.object({
         courseForm: zod.number(),
         formDistance: zod.number(),
@@ -223,12 +351,72 @@ export const AnalyzeRaceResponse = zod.object({
         history: zod.number(),
         overall: zod.number(),
       }),
-      aiSummary: zod.string().nullish(),
       createdAt: zod.string(),
+      gradedAt: zod.string().nullish(),
     }),
+  );
+export const GetRacePredictionsResponse = zod.array(
+  GetRacePredictionsResponseItem,
+);
+
+/**
+ * @summary Trigger forecast generation for a race
+ */
+export const AnalyzeRaceParams = zod.object({
+  raceId: zod.coerce.number(),
+});
+
+export const AnalyzeRaceResponse = zod.object({
+  raceId: zod.number(),
+  predictions: zod.array(
+    zod
+      .object({
+        id: zod.number(),
+        horseId: zod.number(),
+        horseName: zod.string(),
+        rank: zod.number(),
+        score: zod.number(),
+        baseConfidence: zod.number(),
+        confidence: zod.number(),
+        confidenceDelta: zod.number(),
+        confidenceBand: zod.string(),
+        timeToRaceMinutes: zod.number().nullish(),
+        resultStatus: zod.string(),
+        finishPosition: zod.number().nullish(),
+        aiSummary: zod.string().nullish(),
+      })
+      .and(
+        zod.object({
+          raceId: zod.number(),
+          factors: zod.object({
+            courseForm: zod.number(),
+            formDistance: zod.number(),
+            jockeyTrainer: zod.number(),
+            oddsMovement: zod.number(),
+            history: zod.number(),
+            overall: zod.number(),
+          }),
+          createdAt: zod.string(),
+          gradedAt: zod.string().nullish(),
+        }),
+      ),
   ),
   analyzedAt: zod.string(),
   nextUpdateAt: zod.string(),
+});
+
+/**
+ * @summary Record an official result and grade the forecast
+ */
+export const RecordRaceResultParams = zod.object({
+  raceId: zod.coerce.number(),
+});
+
+export const RecordRaceResultBody = zod.object({
+  winnerHorseId: zod.number(),
+  runnerUpHorseId: zod.number().nullish(),
+  thirdHorseId: zod.number().nullish(),
+  notes: zod.string().nullish(),
 });
 
 /**
@@ -266,7 +454,7 @@ export const UpdateWeightsResponse = zod.object({
 });
 
 /**
- * @summary Send a chat message to adjust predictions
+ * @summary Send a chat message to the analyst
  */
 export const SendChatMessageBody = zod.object({
   message: zod.string(),
@@ -276,15 +464,18 @@ export const SendChatMessageBody = zod.object({
 export const SendChatMessageResponse = zod.object({
   message: zod.string(),
   updatedWeights: zod
-    .object({
-      id: zod.number(),
-      courseForm: zod.number(),
-      formDistance: zod.number(),
-      jockeyTrainer: zod.number(),
-      oddsMovement: zod.number(),
-      history: zod.number(),
-      updatedAt: zod.string(),
-    })
+    .union([
+      zod.object({
+        id: zod.number(),
+        courseForm: zod.number(),
+        formDistance: zod.number(),
+        jockeyTrainer: zod.number(),
+        oddsMovement: zod.number(),
+        history: zod.number(),
+        updatedAt: zod.string(),
+      }),
+      zod.null(),
+    ])
     .optional(),
   triggeredAnalysis: zod.boolean(),
 });
@@ -302,16 +493,137 @@ export const GetChatHistoryResponseItem = zod.object({
 export const GetChatHistoryResponse = zod.array(GetChatHistoryResponseItem);
 
 /**
- * @summary Get dashboard summary stats
+ * @summary Get dashboard summary stats and weekly outlook
  */
 export const GetDashboardSummaryResponse = zod.object({
   totalRaces: zod.number(),
   analyzedRaces: zod.number(),
   upcomingRaces: zod.number(),
+  completedRaces: zod.number(),
   totalHorses: zod.number(),
+  todayRaceCount: zod.number(),
+  weekRaceCount: zod.number(),
   nextRaceTime: zod.string().nullish(),
   nextRaceVenue: zod.string().nullish(),
   topPick: zod.string().nullish(),
   topPickRace: zod.string().nullish(),
   venues: zod.array(zod.string()),
+  todayCards: zod.array(
+    zod.object({
+      id: zod.number(),
+      raceNumber: zod.number(),
+      name: zod.string(),
+      venue: zod.string(),
+      distance: zod.number(),
+      raceTime: zod.string(),
+      meetingDate: zod.string().nullish(),
+      status: zod.enum(["upcoming", "analyzing", "completed", "cancelled"]),
+      surface: zod.string(),
+      grade: zod.string().nullish(),
+      prize: zod.string().nullish(),
+      horseCount: zod.number(),
+      nextUpdateAt: zod.string().nullish(),
+      lastAnalyzedAt: zod.string().nullish(),
+      createdAt: zod.string(),
+      syncedFrom: zod.string().nullish(),
+      isToday: zod.boolean(),
+      isThisWeek: zod.boolean(),
+      dayLabel: zod.string(),
+      minutesToRace: zod.number().nullish(),
+      forecastBand: zod.string(),
+      prominence: zod.number(),
+      topPrediction: zod
+        .union([
+          zod.object({
+            id: zod.number(),
+            horseId: zod.number(),
+            horseName: zod.string(),
+            rank: zod.number(),
+            score: zod.number(),
+            baseConfidence: zod.number(),
+            confidence: zod.number(),
+            confidenceDelta: zod.number(),
+            confidenceBand: zod.string(),
+            timeToRaceMinutes: zod.number().nullish(),
+            resultStatus: zod.string(),
+            finishPosition: zod.number().nullish(),
+            aiSummary: zod.string().nullish(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
+      topPredictions: zod.array(
+        zod.object({
+          id: zod.number(),
+          horseId: zod.number(),
+          horseName: zod.string(),
+          rank: zod.number(),
+          score: zod.number(),
+          baseConfidence: zod.number(),
+          confidence: zod.number(),
+          confidenceDelta: zod.number(),
+          confidenceBand: zod.string(),
+          timeToRaceMinutes: zod.number().nullish(),
+          resultStatus: zod.string(),
+          finishPosition: zod.number().nullish(),
+          aiSummary: zod.string().nullish(),
+        }),
+      ),
+      result: zod
+        .union([
+          zod.object({
+            winnerHorseId: zod.number(),
+            winnerHorseName: zod.string(),
+            runnerUpHorseId: zod.number().nullish(),
+            runnerUpHorseName: zod.string().nullish(),
+            thirdHorseId: zod.number().nullish(),
+            thirdHorseName: zod.string().nullish(),
+            recordedAt: zod.string(),
+            notes: zod.string().nullish(),
+            topPickCorrect: zod.boolean().nullish(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
+    }),
+  ),
+  weeklyOverview: zod.array(
+    zod.object({
+      date: zod.string(),
+      label: zod.string(),
+      raceCount: zod.number(),
+      analyzedCount: zod.number(),
+      completedCount: zod.number(),
+      venues: zod.array(zod.string()),
+      spotlightRaceId: zod.number().nullish(),
+      spotlightRaceName: zod.string().nullish(),
+      spotlightHorseName: zod.string().nullish(),
+      spotlightConfidence: zod.number().nullish(),
+    }),
+  ),
+  performance: zod.object({
+    sampleSize: zod.number(),
+    topPickWinRate: zod.number(),
+    placedRate: zod.number(),
+    averageConfidence: zod.number(),
+    confidenceBias: zod.number(),
+    factorAdjustments: zod.object({
+      courseForm: zod.number(),
+      formDistance: zod.number(),
+      jockeyTrainer: zod.number(),
+      oddsMovement: zod.number(),
+      history: zod.number(),
+    }),
+    strongestEdge: zod.string().nullish(),
+    recentResults: zod.array(
+      zod.object({
+        raceId: zod.number(),
+        raceName: zod.string(),
+        meetingDate: zod.string().nullish(),
+        topPickHorseName: zod.string().nullish(),
+        winnerHorseName: zod.string(),
+        topPickCorrect: zod.boolean(),
+      }),
+    ),
+  }),
 });

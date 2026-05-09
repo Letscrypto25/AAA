@@ -9,6 +9,7 @@ import {
   GetRaceHorsesParams,
   GetRaceParams,
   GetRacesQueryParams,
+  RecordRaceResultBody,
 } from "@workspace/api-zod";
 import { getNextUpdateTime } from "../lib/scheduler";
 import { runRaceForecast, recordRaceResult } from "../lib/forecasting";
@@ -60,8 +61,8 @@ router.post("/races", async (req, res): Promise<void> => {
   }
 
   const meetingDate =
-    typeof req.body?.meetingDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.meetingDate)
-      ? req.body.meetingDate
+    typeof body.data.meetingDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.data.meetingDate)
+      ? body.data.meetingDate
       : null;
 
   const [race] = await db
@@ -228,30 +229,18 @@ router.post("/races/:raceId/result", async (req, res): Promise<void> => {
     return;
   }
 
-  const winnerHorseId = Number(req.body?.winnerHorseId);
-  const runnerUpHorseId = req.body?.runnerUpHorseId == null ? null : Number(req.body.runnerUpHorseId);
-  const thirdHorseId = req.body?.thirdHorseId == null ? null : Number(req.body.thirdHorseId);
-  const notes = typeof req.body?.notes === "string" ? req.body.notes : null;
-
-  if (!Number.isInteger(winnerHorseId) || winnerHorseId <= 0) {
-    res.status(400).json({ error: "winnerHorseId is required" });
-    return;
-  }
-  if (runnerUpHorseId !== null && (!Number.isInteger(runnerUpHorseId) || runnerUpHorseId <= 0)) {
-    res.status(400).json({ error: "runnerUpHorseId must be a positive integer" });
-    return;
-  }
-  if (thirdHorseId !== null && (!Number.isInteger(thirdHorseId) || thirdHorseId <= 0)) {
-    res.status(400).json({ error: "thirdHorseId must be a positive integer" });
+  const body = RecordRaceResultBody.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: body.error.message });
     return;
   }
 
   try {
     await recordRaceResult(params.data.raceId, {
-      winnerHorseId,
-      runnerUpHorseId,
-      thirdHorseId,
-      notes,
+      winnerHorseId: body.data.winnerHorseId,
+      runnerUpHorseId: body.data.runnerUpHorseId ?? null,
+      thirdHorseId: body.data.thirdHorseId ?? null,
+      notes: body.data.notes ?? null,
     });
     const [race] = await db.select().from(racesTable).where(eq(racesTable.id, params.data.raceId)).limit(1);
     if (!race) {

@@ -4,8 +4,10 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
-- `pnpm --filter @workspace/aaa-bets run dev` — run the frontend (port 5173)
+- `pnpm dev` — run the API server and frontend together in development
+- `pnpm dev:api` — run the API server only (port 8080)
+- `pnpm dev:web` — run the frontend only (port 5173)
+- `pnpm start` — serve the production API plus built frontend from one app port
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -58,8 +60,10 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 ## Gotchas
 
 - Frontend workflow port MUST be 5173 (in the Replit supported list). Port 18461 (createArtifact default) was not supported and caused DIDNT_OPEN_A_PORT failures.
+- Production deploy now expects the Express API server to serve `artifacts/aaa-bets/dist/public` on the same app port, with `/api` reserved for JSON routes.
 - `lib/api-client-react` and `lib/api-zod` export from `./src/index.ts` directly — Vite resolves TypeScript source, requires `fs.strict: false` and `allow: [workspaceRoot]` in vite.config.ts
 - Orval codegen must use `mode: "single"` for zod output
+- On this Windows checkout, missing `@esbuild/win32-x64` blocks Orval React client generation and bundle builds until the optional esbuild binary is repaired.
 - Never use `console.log` in server code — use `req.log` in handlers, `logger` elsewhere
 
 ## Pointers

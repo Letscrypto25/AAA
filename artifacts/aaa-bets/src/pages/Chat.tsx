@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
-import { useGetChatHistory, useSendChatMessage, useGetRaces } from "@workspace/api-client-react";
+import { useGetChatHistory, useSendChatMessage, useGetRaces, useGetDashboardSummary } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetChatHistoryQueryKey, getGetRacesQueryKey } from "@workspace/api-client-react";
-import { MessageSquare, Send, Bot, User, Zap, Settings2, TrendingUp } from "lucide-react";
+import { Bot, CalendarDays, Clock3, MessageSquare, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, User, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
 import { Link } from "wouter";
 
 function renderMessage(text: string) {
@@ -43,10 +44,15 @@ type WeightsUpdate = {
   updatedAt: string;
 };
 
+function formatConfidence(value?: number | null) {
+  return value == null ? "Forecast pending" : `${Math.round(value * 100)}% confidence`;
+}
+
 export default function Chat() {
   const qc = useQueryClient();
   const { data: history, isLoading } = useGetChatHistory();
   const { data: races } = useGetRaces();
+  const { data: summary } = useGetDashboardSummary();
   const sendMessage = useSendChatMessage();
 
   const [input, setInput] = useState("");
@@ -57,10 +63,29 @@ export default function Chat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const allMessages = [...(history ?? []), ...optimisticMessages];
-
-  const todayRaces = (races ?? []).filter(
-    (r) => r.status === "upcoming" || r.status === "analyzing",
-  );
+  const summaryTodayCards = summary?.todayCards ?? [];
+  const todayRaces = summaryTodayCards.length > 0
+    ? summaryTodayCards
+    : (races ?? []).filter((r) => r.status === "upcoming" || r.status === "analyzing");
+  const weeklyOverview = summary?.weeklyOverview ?? [];
+  const performance = summary?.performance;
+  const focusRace = (races ?? []).find((race) => race.id === selectedRaceId)
+    ?? todayRaces.find((race) => race.id === selectedRaceId);
+  const nextUpRace = [...todayRaces]
+    .filter((race) => race.status === "upcoming" || race.status === "analyzing")
+    .sort((left, right) => {
+      const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+      const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+      return leftMinutes - rightMinutes;
+    })[0];
+  const bestBetRace = [...todayRaces]
+    .filter((race) => race.topPrediction)
+    .sort((left, right) => {
+      const confidenceGap = (right.topPrediction?.confidence ?? 0) - (left.topPrediction?.confidence ?? 0);
+      if (confidenceGap !== 0) return confidenceGap;
+      return (right.prominence ?? 0) - (left.prominence ?? 0);
+    })[0];
+  const recentModelResult = performance?.recentResults?.[0];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -98,13 +123,15 @@ export default function Chat() {
 
   const dynamicSuggestions = todayRaces.length > 0
     ? [
-        `Which race today has the strongest favourite?`,
-        `Give me your best single bet for today`,
-        todayRaces[0] ? `Analyse ${todayRaces[0].name} for me` : "Explain the prediction weights",
+        bestBetRace?.topPrediction ? `Why is ${bestBetRace.topPrediction.horseName} the best bet today?` : null,
+        nextUpRace ? `Talk me through ${nextUpRace.name}` : null,
+        focusRace?.topPrediction ? `Who can beat ${focusRace.topPrediction.horseName} in ${focusRace.name}?` : null,
+        weeklyOverview[0]?.spotlightRaceName ? `Which race later this week looks strongest?` : null,
+        recentModelResult ? `What did the latest ${recentModelResult.topPickCorrect ? "hit" : "miss"} teach the model?` : null,
         `Which jockey has the best book today?`,
         `Which races are worth betting on?`,
         `Increase weight on odds movement`,
-      ]
+      ].filter((value): value is string => Boolean(value))
     : [
         "Give more weight to odds movement",
         "Which horse has the best trainer/jockey combo?",
@@ -149,6 +176,88 @@ export default function Chat() {
         </div>
       )}
 
+      <div className="px-6 pt-4 grid gap-3 md:grid-cols-3">
+        {bestBetRace?.topPrediction && (
+          <button
+            onClick={() => {
+              setSelectedRaceId(bestBetRace.id);
+              setInput(`Why is ${bestBetRace.topPrediction?.horseName} the best bet today?`);
+            }}
+            className="text-left rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 hover:bg-primary/15 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-primary text-xs font-semibold uppercase tracking-wide">
+              <Sparkles className="size-3.5" /> Best bet now
+            </div>
+            <p className="text-sm font-semibold text-foreground mt-2">{bestBetRace.topPrediction.horseName}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Race {bestBetRace.raceNumber} {bestBetRace.name} · {formatConfidence(bestBetRace.topPrediction.confidence)}
+            </p>
+            <p className="text-xs text-primary mt-2">{formatConfidenceBand(bestBetRace.forecastBand)}</p>
+          </button>
+        )}
+
+        {nextUpRace && (
+          <button
+            onClick={() => {
+              setSelectedRaceId(nextUpRace.id);
+              setInput(`Talk me through ${nextUpRace.name}`);
+            }}
+            className="text-left rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/30 hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Clock3 className="size-3.5 text-primary" /> Next off
+            </div>
+            <p className="text-sm font-semibold text-foreground mt-2">Race {nextUpRace.raceNumber} {nextUpRace.name}</p>
+            <p className="text-xs text-muted-foreground mt-1">{nextUpRace.venue} · {nextUpRace.raceTime} · {formatMinutesToRace(nextUpRace.minutesToRace)}</p>
+            <p className="text-xs text-foreground mt-2">{nextUpRace.topPrediction ? `${nextUpRace.topPrediction.horseName} leads the book` : "Forecast still building"}</p>
+          </button>
+        )}
+
+        {(weeklyOverview[0] || recentModelResult) && (
+          <button
+            onClick={() => setInput(weeklyOverview[0]?.spotlightRaceName ? `Which race later this week looks strongest?` : `What did the latest result teach the model?`)}
+            className="text-left rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/30 hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {weeklyOverview[0]?.spotlightRaceName ? <CalendarDays className="size-3.5 text-primary" /> : <ShieldCheck className="size-3.5 text-primary" />} Weekly angle
+            </div>
+            <p className="text-sm font-semibold text-foreground mt-2">
+              {weeklyOverview[0]?.spotlightRaceName ?? (recentModelResult?.topPickCorrect ? "Recent model hit" : "Recent model lesson")}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {weeklyOverview[0]?.spotlightRaceName
+                ? `${weeklyOverview[0].label} · ${weeklyOverview[0].spotlightHorseName ?? "Spotlight forming"}${weeklyOverview[0].spotlightConfidence != null ? ` · ${Math.round(weeklyOverview[0].spotlightConfidence * 100)}%` : ""}`
+                : recentModelResult
+                  ? `${recentModelResult.raceName} · ${recentModelResult.topPickCorrect ? "top pick landed" : "top pick missed"}`
+                  : "Ask for the week-ahead confidence map"}
+            </p>
+            <p className="text-xs text-foreground mt-2">
+              {performance?.strongestEdge ?? "Use chat to compare today against the next 7 days"}
+            </p>
+          </button>
+        )}
+      </div>
+
+      {focusRace && (
+        <div className="mx-6 mt-3 rounded-xl border border-primary/20 bg-primary/8 px-4 py-3 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-primary">Focused race</p>
+            <p className="text-sm font-semibold text-foreground mt-1">Race {focusRace.raceNumber} {focusRace.name}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {focusRace.venue} · {focusRace.raceTime} · {formatMinutesToRace(focusRace.minutesToRace)}
+            </p>
+            <p className="text-xs text-foreground mt-2">
+              {focusRace.topPrediction
+                ? `${focusRace.topPrediction.horseName} leads at ${formatConfidence(focusRace.topPrediction.confidence)} · ${formatConfidenceBand(focusRace.forecastBand)}`
+                : "Forecast still building for this race"}
+            </p>
+          </div>
+          <button onClick={() => setSelectedRaceId(undefined)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
         {isLoading ? (
           <div className="text-center text-muted-foreground text-sm pt-8">Loading chat history...</div>
@@ -167,14 +276,34 @@ export default function Chat() {
               <div className="bg-card border border-card-border rounded-xl p-4 max-w-md mx-auto text-left space-y-1.5">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Today's races I can analyse</p>
                 {todayRaces.slice(0, 5).map((r) => (
-                  <div key={r.id} className="flex items-center justify-between text-sm">
-                    <span className="text-foreground">{r.name}</span>
-                    <span className="text-xs text-muted-foreground">{r.raceTime} · {r.distance}m</span>
+                  <div key={r.id} className="flex items-center justify-between text-sm gap-3">
+                    <span className="text-foreground min-w-0 truncate">{r.name}</span>
+                    <span className="text-xs text-muted-foreground shrink-0">{r.raceTime} · {r.distance}m</span>
                   </div>
                 ))}
                 {todayRaces.length > 5 && (
                   <p className="text-xs text-muted-foreground">+{todayRaces.length - 5} more races</p>
                 )}
+              </div>
+            )}
+            {weeklyOverview.length > 0 && (
+              <div className="bg-card border border-card-border rounded-xl p-4 max-w-md mx-auto text-left space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Week-ahead angles</p>
+                {weeklyOverview.slice(0, 3).map((day) => (
+                  <div key={day.date} className="flex items-start justify-between gap-3 text-sm">
+                    <div>
+                      <p className="text-foreground font-medium">{day.label}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {day.raceCount} races · {day.venues.join(", ") || "Venues pending"}
+                      </p>
+                    </div>
+                    <span className="text-xs text-primary shrink-0">
+                      {day.spotlightHorseName && day.spotlightConfidence != null
+                        ? `${day.spotlightHorseName} ${Math.round(day.spotlightConfidence * 100)}%`
+                        : "Building"}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
             <div className="flex flex-wrap gap-2 justify-center max-w-lg mx-auto">
@@ -253,9 +382,11 @@ export default function Chat() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={todayRaces.length > 0
-              ? `Ask about today's ${todayRaces.length} races, best bets, weights...`
-              : "Ask about predictions, weights, race strategy..."}
+            placeholder={focusRace
+              ? `Ask about ${focusRace.name}, ${focusRace.topPrediction?.horseName ?? "the field"}, or the best play...`
+              : todayRaces.length > 0
+                ? `Ask about today's ${todayRaces.length} races, best bets, weights...`
+                : "Ask about predictions, weights, race strategy..."}
             rows={1}
             className="flex-1 bg-transparent text-sm text-foreground resize-none focus:outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
             style={{ height: "auto" }}
@@ -275,7 +406,7 @@ export default function Chat() {
         </div>
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Enter to send · Shift+Enter for new line
+            {focusRace ? `Focused on Race ${focusRace.raceNumber} · ` : ""}Enter to send · Shift+Enter for new line
           </p>
           <Link href="/weights">
             <span className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer">
