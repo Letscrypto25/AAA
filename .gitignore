@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local auth/debug artifacts
+gcm-diagnose.log
+gcm-*.log
