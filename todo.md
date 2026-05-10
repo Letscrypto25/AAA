@@ -19,3 +19,7 @@
 - 2026-05-09: Fixed `pnpm-lock.yaml` mismatch with `overrides` configuration and pushed to the repository specified in `.env`.
 - 2026-05-09: Verified local `main` branch is fully synchronized with the remote `main` branch of the new fork.
 - 2026-05-10: Fixed `pnpm build` failure by adding fallbacks for `PORT` and `BASE_PATH` in `artifacts/mockup-sandbox/vite.config.ts`.
+- 2026-05-10: Fixed `pnpm build` failure on Railway by specifying `engines` requirement (Node.js >= 22.12.0) in `package.json`.
+- 2026-05-10: Renamed the primary local branch to `aaa` and synchronized it with the remote `main` and `aaa` branches.
+- 2026-05-10: Successfully pushed the database schema to Supabase (port 6543) after fixing Windows-specific compatibility issues and `drizzle-kit` SSL configuration.
+- 2026-05-10: Resolved `TypeError: Cannot read properties of undefined (reading 'id')` in `forecasting.ts` by adding safety checks for AI-generated horse indices and filtering out-of-bounds predictions.
