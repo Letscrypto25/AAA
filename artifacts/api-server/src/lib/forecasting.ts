@@ -347,10 +347,12 @@ export async function runRaceForecast(
 
   await db.delete(predictionsTable).where(eq(predictionsTable.raceId, raceId));
 
-  const currentPredictionRows = ranked.map((prediction) => ({
-    raceId,
-    horseId: horses[prediction.horseIndex].id,
-    snapshotId: snapshot.id,
+  const currentPredictionRows = ranked
+    .filter((p) => horses[p.horseIndex] !== undefined)
+    .map((prediction) => ({
+      raceId,
+      horseId: horses[prediction.horseIndex].id,
+      snapshotId: snapshot.id,
     rank: prediction.rank,
     score: prediction.score,
     baseConfidence: prediction.baseConfidence,

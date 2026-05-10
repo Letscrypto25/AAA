@@ -310,11 +310,13 @@ Respond with ONLY valid JSON:
   if (!jsonMatch) throw new Error("No JSON found in response");
   const parsed = JSON.parse(jsonMatch[0]) as { predictions: HorsePrediction[] };
 
-  return parsed.predictions.map((prediction) => {
-    const activeHorse = activeHorses[prediction.horseIndex];
-    const realIndex = activeHorse ? horses.findIndex((horse) => horse.name === activeHorse.name) : prediction.horseIndex;
-    return { ...prediction, horseIndex: realIndex >= 0 ? realIndex : prediction.horseIndex };
-  });
+  return parsed.predictions
+    .filter((p) => p.horseIndex >= 0 && p.horseIndex < activeHorses.length)
+    .map((prediction) => {
+      const activeHorse = activeHorses[prediction.horseIndex];
+      const realIndex = horses.findIndex((horse) => horse.name === activeHorse.name);
+      return { ...prediction, horseIndex: realIndex >= 0 ? realIndex : prediction.horseIndex };
+    });
 }
 
 export interface ChatWeightSuggestion {
