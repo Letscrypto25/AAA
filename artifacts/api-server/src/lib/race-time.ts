@@ -1,16 +1,55 @@
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const CAT_OFFSET_HOURS = 2;
 
-function pad(value: number): string {
-  return value.toString().padStart(2, "0");
+export const CAT_TIME_ZONE = "Africa/Johannesburg";
+
+function getDateParts(date: Date, timeZone: string = CAT_TIME_ZONE): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = Number(parts.find((part) => part.type === "year")?.value ?? 0);
+  const month = Number(parts.find((part) => part.type === "month")?.value ?? 0);
+  const day = Number(parts.find((part) => part.type === "day")?.value ?? 0);
+  return { year, month, day };
 }
 
-export function formatDateKey(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function parseDateKey(dateKey: string): { year: number; month: number; day: number } | null {
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function toDayIndex(dateKey: string): number | null {
+  const parts = parseDateKey(dateKey);
+  if (!parts) return null;
+  return Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / DAY_MS);
+}
+
+export function formatDateKey(date: Date, timeZone: string = CAT_TIME_ZONE): string {
+  const { year, month, day } = getDateParts(date, timeZone);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export function getTodayDateKey(reference: Date = new Date()): string {
-  return formatDateKey(reference);
+  return formatDateKey(reference, CAT_TIME_ZONE);
+}
+
+export function addDaysToDateKey(dateKey: string, days: number): string {
+  const parts = parseDateKey(dateKey);
+  if (!parts) return dateKey;
+
+  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12, 0, 0));
+  return formatDateKey(shifted, CAT_TIME_ZONE);
 }
 
 export function getRaceDateTime(
@@ -19,10 +58,24 @@ export function getRaceDateTime(
   reference: Date = new Date(),
 ): Date {
   const [hours, minutes] = raceTime.split(":").map(Number);
-  const dateKey = meetingDate && /^\d{4}-\d{2}-\d{2}$/.test(meetingDate) ? meetingDate : formatDateKey(reference);
-  const raceDate = new Date(`${dateKey}T00:00:00`);
-  raceDate.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
-  return raceDate;
+  const dateKey = meetingDate && /^\d{4}-\d{2}-\d{2}$/.test(meetingDate) ? meetingDate : formatDateKey(reference, CAT_TIME_ZONE);
+  const parts = parseDateKey(dateKey);
+
+  if (!parts) {
+    return reference;
+  }
+
+  return new Date(
+    Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      (Number.isFinite(hours) ? hours : 0) - CAT_OFFSET_HOURS,
+      Number.isFinite(minutes) ? minutes : 0,
+      0,
+      0,
+    ),
+  );
 }
 
 export function getMinutesToRace(
@@ -36,29 +89,36 @@ export function getMinutesToRace(
 }
 
 export function isDateToday(dateKey?: string | null, reference: Date = new Date()): boolean {
-  return !!dateKey && dateKey === formatDateKey(reference);
+  return !!dateKey && dateKey === formatDateKey(reference, CAT_TIME_ZONE);
 }
 
 export function isDateWithinDays(dateKey?: string | null, days: number = 7, reference: Date = new Date()): boolean {
   if (!dateKey) return false;
-  const target = new Date(`${dateKey}T00:00:00`);
-  const start = new Date(`${formatDateKey(reference)}T00:00:00`);
-  const diffDays = Math.floor((target.getTime() - start.getTime()) / (24 * HOUR_MS));
+  const targetDay = toDayIndex(dateKey);
+  const startDay = toDayIndex(formatDateKey(reference, CAT_TIME_ZONE));
+  if (targetDay === null || startDay === null) return false;
+
+  const diffDays = targetDay - startDay;
   return diffDays >= 0 && diffDays < days;
 }
 
 export function getRelativeDayLabel(dateKey?: string | null, reference: Date = new Date()): string {
   if (!dateKey) return "Unscheduled";
 
-  const target = new Date(`${dateKey}T00:00:00`);
-  const start = new Date(`${formatDateKey(reference)}T00:00:00`);
-  const diffDays = Math.floor((target.getTime() - start.getTime()) / (24 * HOUR_MS));
+  const targetDay = toDayIndex(dateKey);
+  const startDay = toDayIndex(formatDateKey(reference, CAT_TIME_ZONE));
+  if (targetDay === null || startDay === null) return "Unscheduled";
 
+  const diffDays = targetDay - startDay;
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Tomorrow";
   if (diffDays === -1) return "Yesterday";
 
-  return target.toLocaleDateString("en-ZA", {
+  const parts = parseDateKey(dateKey);
+  if (!parts) return "Unscheduled";
+
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0)).toLocaleDateString("en-ZA", {
+    timeZone: CAT_TIME_ZONE,
     weekday: "short",
     day: "numeric",
     month: "short",

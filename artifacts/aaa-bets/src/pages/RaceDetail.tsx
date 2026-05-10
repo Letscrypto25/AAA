@@ -288,7 +288,7 @@ export default function RaceDetail() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-bold text-foreground">{race.name}</h1>
             {race.grade && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">{race.grade}</span>}
-            {race.syncedFrom === "goldcircle" && <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-400"><Wifi className="size-3" />Auto-synced</span>}
+            {race.syncedFrom && <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-400"><Wifi className="size-3" />Live sync</span>}
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.dayLabel}</span>
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{formatConfidenceBand(race.forecastBand)}</span>
           </div>
