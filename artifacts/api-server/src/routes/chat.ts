@@ -22,7 +22,7 @@ function oddsLabel(movement: string): string {
 
 async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
   const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
-  const cards = await buildRaceForecastCards(allRaces);
+  const cards = (await buildRaceForecastCards(allRaces)).filter((card) => card.horseCount > 0 || !!card.result);
   const performance = await getLearningPerformanceSummary();
   const allHorses = await db.select().from(horsesTable);
   const allPredictions = await db.select().from(predictionsTable).orderBy(predictionsTable.rank);
@@ -52,6 +52,7 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
 
   const lines: string[] = [];
   lines.push("AAA BETS FORECAST CONTEXT");
+  lines.push("SOURCE OF TRUTH: Use only this live briefing plus the current user message. Ignore stale assumptions from older chat turns if they conflict with this briefing.");
   lines.push(
     `TODAY: ${todayCards.length} races loaded | WEEK: ${cards.filter((card) => card.isThisWeek).length} races across ${weeklyOverview.length} days`,
   );
@@ -68,6 +69,8 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
         .join(" | ")}`,
     );
   }
+  lines.push("");
+  lines.push("CURRENT WEIGHTS SNAPSHOT: Course Form / Form & Distance / Jockey & Trainer / Odds Movement / History are set in-app and can be changed on request.");
   lines.push("");
 
   if (todayCards.length === 0) {

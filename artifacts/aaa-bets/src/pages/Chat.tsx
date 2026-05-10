@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useGetChatHistory, useSendChatMessage, useGetRaces, useGetDashboardSummary } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGetChatHistoryQueryKey, getGetRacesQueryKey } from "@workspace/api-client-react";
+import { getGetChatHistoryQueryKey, getGetRacesQueryKey, getGetWeightsQueryKey } from "@workspace/api-client-react";
 import { Bot, CalendarDays, Clock3, MessageSquare, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, User, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
@@ -63,13 +63,14 @@ export default function Chat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const allMessages = [...(history ?? []), ...optimisticMessages];
-  const summaryTodayCards = summary?.todayCards ?? [];
+  const usableRaces = (races ?? []).filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
+  const summaryTodayCards = (summary?.todayCards ?? []).filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
   const todayRaces = summaryTodayCards.length > 0
     ? summaryTodayCards
-    : (races ?? []).filter((r) => r.status === "upcoming" || r.status === "analyzing");
+    : usableRaces.filter((r) => r.status === "upcoming" || r.status === "analyzing");
   const weeklyOverview = summary?.weeklyOverview ?? [];
   const performance = summary?.performance;
-  const focusRace = (races ?? []).find((race) => race.id === selectedRaceId)
+  const focusRace = usableRaces.find((race) => race.id === selectedRaceId)
     ?? todayRaces.find((race) => race.id === selectedRaceId);
   const nextUpRace = [...todayRaces]
     .filter((race) => race.status === "upcoming" || race.status === "analyzing")
@@ -106,6 +107,7 @@ export default function Chat() {
       if ((result as { updatedWeights?: WeightsUpdate }).updatedWeights) {
         setLastWeightsUpdate((result as { updatedWeights: WeightsUpdate }).updatedWeights);
         await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+        await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
       }
       await qc.invalidateQueries({ queryKey: getGetChatHistoryQueryKey() });
       setOptimisticMessages([]);
@@ -131,6 +133,7 @@ export default function Chat() {
         `Which jockey has the best book today?`,
         `Which races are worth betting on?`,
         `Increase weight on odds movement`,
+        `Set weights to 30% course form, 25% form and distance, 20% jockey and trainer, 15% odds movement, 10% history`,
       ].filter((value): value is string => Boolean(value))
     : [
         "Give more weight to odds movement",
@@ -140,7 +143,7 @@ export default function Chat() {
       ];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-screen max-w-3xl mx-auto">
+    <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-screen max-w-5xl mx-auto">
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-2">
           <MessageSquare className="size-5 text-primary" />
@@ -159,7 +162,7 @@ export default function Chat() {
             className="text-xs bg-card border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring max-w-[160px]"
           >
             <option value="">All races</option>
-            {(races ?? []).map((r) => (
+            {usableRaces.map((r) => (
               <option key={r.id} value={r.id}>{r.name}</option>
             ))}
           </select>
@@ -176,7 +179,7 @@ export default function Chat() {
         </div>
       )}
 
-      <div className="px-6 pt-4 grid gap-3 md:grid-cols-3">
+      <div className="px-6 pt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
         {bestBetRace?.topPrediction && (
           <button
             onClick={() => {
@@ -258,7 +261,7 @@ export default function Chat() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
         {isLoading ? (
           <div className="text-center text-muted-foreground text-sm pt-8">Loading chat history...</div>
         ) : allMessages.length === 0 ? (
@@ -268,8 +271,8 @@ export default function Chat() {
             </div>
             <div>
               <p className="font-semibold text-foreground text-lg">AAA Bets AI Analyst</p>
-              <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
-                I have full visibility of today's race card — every horse, jockey, trainer, form, odds movement, and AI prediction score. Ask me anything.
+              <p className="text-base text-muted-foreground mt-1 max-w-2xl mx-auto leading-7">
+                I have the live race card, runners, odds, recent model results, and current weights in view. Ask for the best bet, a race breakdown, or tell me exactly how you want the weights set.
               </p>
             </div>
             {todayRaces.length > 0 && (
@@ -331,7 +334,7 @@ export default function Chat() {
                 {msg.role === "user" ? <User className="size-4" /> : <Bot className="size-4 text-primary" />}
               </div>
               <div className={cn(
-                "max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed space-y-0.5",
+                "max-w-[90%] md:max-w-[78%] rounded-2xl px-5 py-4 text-[15px] leading-7 space-y-1",
                 msg.role === "user"
                   ? "bg-primary text-primary-foreground rounded-tr-sm"
                   : "bg-card border border-card-border text-foreground rounded-tl-sm",
@@ -376,7 +379,7 @@ export default function Chat() {
       )}
 
       <div className="px-6 py-4 border-t border-border space-y-2">
-        <div className="flex gap-3 items-end bg-card border border-card-border rounded-xl p-3">
+        <div className="flex gap-3 items-end bg-card border border-card-border rounded-xl p-4">
           <textarea
             ref={textareaRef}
             value={input}
@@ -388,7 +391,7 @@ export default function Chat() {
                 ? `Ask about today's ${todayRaces.length} races, best bets, weights...`
                 : "Ask about predictions, weights, race strategy..."}
             rows={1}
-            className="flex-1 bg-transparent text-sm text-foreground resize-none focus:outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
+            className="flex-1 bg-transparent text-[15px] leading-6 text-foreground resize-none focus:outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
             style={{ height: "auto" }}
             onInput={(e) => {
               const t = e.target as HTMLTextAreaElement;
@@ -410,7 +413,7 @@ export default function Chat() {
           </p>
           <Link href="/weights">
             <span className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer">
-              <TrendingUp className="size-3" /> Adjust weights
+              <TrendingUp className="size-3" /> Set or adjust weights
             </span>
           </Link>
         </div>

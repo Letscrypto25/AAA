@@ -210,6 +210,19 @@ async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<voi
 }
 
 async function syncRace(program: ToteProgram, detail: ToteRace): Promise<{ created: boolean }> {
+  const hasLiveCard = (detail.Runners ?? []).some((runner) => !!runner.Name?.trim()) || hasOfficialResult(detail);
+  if (!hasLiveCard) {
+    const existingRace = await findRace(program, detail);
+    if (existingRace) {
+      const existingHorses = await db.select({ id: horsesTable.id }).from(horsesTable).where(eq(horsesTable.raceId, existingRace.id)).limit(1);
+      if (existingHorses.length === 0) {
+        await db.delete(racesTable).where(eq(racesTable.id, existingRace.id));
+        logger.info({ raceId: existingRace.id, venue: existingRace.venue, raceNumber: existingRace.raceNumber }, "Removed empty Tote shell race");
+      }
+    }
+    return { created: false };
+  }
+
   const { race, created } = await upsertRace(program, detail);
   await syncRaceHorses(race.id, detail);
   await syncOfficialResult(race.id, detail);

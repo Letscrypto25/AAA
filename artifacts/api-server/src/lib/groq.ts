@@ -327,6 +327,88 @@ export interface ChatWeightSuggestion {
   history?: number;
 }
 
+const WEIGHT_KEYS = ["courseForm", "formDistance", "jockeyTrainer", "oddsMovement", "history"] as const;
+const WEIGHT_LABELS: Array<{ key: keyof WeightConfig; patterns: RegExp[] }> = [
+  { key: "courseForm", patterns: [/course\s*form/i, /course/i] },
+  { key: "formDistance", patterns: [/form\s*(?:and|&)?\s*distance/i, /distance/i, /form/i] },
+  { key: "jockeyTrainer", patterns: [/jockey\s*(?:and|&)?\s*trainer/i, /trainer\s*\/\s*jockey/i, /jockey/i, /trainer/i] },
+  { key: "oddsMovement", patterns: [/odds\s*movement/i, /market/i, /odds/i] },
+  { key: "history", patterns: [/history/i, /historical/i, /class/i] },
+];
+
+function normalizeWeights(weights: WeightConfig): WeightConfig {
+  const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
+  if (!Number.isFinite(total) || total <= 0) return weights;
+
+  return {
+    courseForm: weights.courseForm / total,
+    formDistance: weights.formDistance / total,
+    jockeyTrainer: weights.jockeyTrainer / total,
+    oddsMovement: weights.oddsMovement / total,
+    history: weights.history / total,
+  };
+}
+
+function buildSingleFactorAdjustment(currentWeights: WeightConfig, key: keyof WeightConfig, delta: number): WeightConfig {
+  const next = { ...currentWeights };
+  next[key] = Math.min(0.6, Math.max(0.05, next[key] + delta));
+
+  const others = WEIGHT_KEYS.filter((candidate) => candidate !== key);
+  const otherTotal = others.reduce((sum, candidate) => sum + currentWeights[candidate], 0);
+  const remaining = Math.max(0.05 * others.length, 1 - next[key]);
+
+  for (const other of others) {
+    const share = otherTotal > 0 ? currentWeights[other] / otherTotal : 1 / others.length;
+    next[other] = remaining * share;
+  }
+
+  return normalizeWeights(next);
+}
+
+function tryParseWeightSuggestions(message: string, currentWeights: WeightConfig): ChatWeightSuggestion | undefined {
+  const text = message.trim();
+  if (!/weight/i.test(text) && !/course|distance|jockey|trainer|odds|history|market/i.test(text)) {
+    return undefined;
+  }
+
+  const explicit: Partial<WeightConfig> = {};
+  for (const { key, patterns } of WEIGHT_LABELS) {
+    for (const pattern of patterns) {
+      const match = text.match(new RegExp(`${pattern.source}[^\\d]{0,20}(\\d{1,3})(?:\\s*%?)`, "i"));
+      if (match) {
+        explicit[key] = Number(match[1]) / 100;
+        break;
+      }
+    }
+  }
+
+  if (Object.keys(explicit).length >= 2) {
+    return normalizeWeights({ ...currentWeights, ...explicit });
+  }
+
+  const orderedNumbers = [...text.matchAll(/(\d{1,3})(?:\s*%)/g)].map((match) => Number(match[1]) / 100);
+  if (/weights?/i.test(text) && orderedNumbers.length === 5) {
+    return normalizeWeights({
+      courseForm: orderedNumbers[0],
+      formDistance: orderedNumbers[1],
+      jockeyTrainer: orderedNumbers[2],
+      oddsMovement: orderedNumbers[3],
+      history: orderedNumbers[4],
+    });
+  }
+
+  const increase = /\b(increase|more|raise|boost|up|higher)\b/i.test(text);
+  const decrease = /\b(decrease|less|lower|reduce|down)\b/i.test(text);
+  const requestedFactor = WEIGHT_LABELS.find(({ patterns }) => patterns.some((pattern) => pattern.test(text)))?.key;
+
+  if (requestedFactor && (increase || decrease || /important/i.test(text))) {
+    const delta = decrease && !increase ? -0.05 : 0.05;
+    return buildSingleFactorAdjustment(currentWeights, requestedFactor, delta);
+  }
+
+  return undefined;
+}
+
 export async function chatWithAI(
   message: string,
   currentWeights: WeightConfig,
@@ -334,6 +416,8 @@ export async function chatWithAI(
   raceDayBriefing?: string,
 ): Promise<{ reply: string; weightSuggestions?: ChatWeightSuggestion }> {
   const systemPrompt = `You are AAA Bets - an expert South African horse racing analyst and AI betting advisor. You have full visibility of today's card, the coming week, recent graded results, live odds movement, and the model's current hit rate.
+
+The live FORECAST CONTEXT below is the source of truth. If older chat history conflicts with it, trust the live FORECAST CONTEXT and say so plainly.
 
 ## YOUR CAPABILITIES
 - Race analysis: Break down any race, compare the field, identify value bets and dangers
@@ -360,6 +444,8 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - When giving a best bet, format it clearly: **BEST BET: [Horse Name] @ [odds] in Race [N]**
 - For multi-race or multi-day asks, rank the races by confidence and explain why one card is stronger than another
 - Mention if the model was recently right or wrong when that matters
+- When the user asks what is going on, summarise the current live races, standout horse, model edge, and recent result lessons from the FORECAST CONTEXT
+- If the user asks to set, change, increase, decrease, or rebalance weights, either confirm the new mix or recommend one, and include the weights tag
 - When suggesting weight changes, include the weights tag
 - Keep responses focused - do not pad
 - Use SA racing terminology: "the favourite", "each-way", "trifecta", "the rail", "outside draw"
@@ -388,10 +474,14 @@ Weights must sum to exactly 1.0.`;
 
   if (weightsMatch) {
     try {
-      weightSuggestions = JSON.parse(weightsMatch[1]) as ChatWeightSuggestion;
+      weightSuggestions = normalizeWeights(JSON.parse(weightsMatch[1]) as WeightConfig);
     } catch {
       logger.warn("Failed to parse weight suggestions from AI");
     }
+  }
+
+  if (!weightSuggestions) {
+    weightSuggestions = tryParseWeightSuggestions(message, currentWeights);
   }
 
   return { reply, weightSuggestions };
