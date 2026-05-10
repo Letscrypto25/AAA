@@ -16,3 +16,6 @@
 - 2026-05-09: Set `.env` `PORT=8080` for platform-compatible default while Railway still binds runtime `process.env.PORT`.
 - 2026-05-09: Merged `origin/main` into local `main` to resolve divergence and unrelated histories.
 - 2026-05-09: Successfully scrubbed `.env` from the entire Git history using `filter-branch` and force-pushed to `main` using the provided token.
+- 2026-05-09: Fixed `pnpm-lock.yaml` mismatch with `overrides` configuration and pushed to the repository specified in `.env`.
+- 2026-05-09: Verified local `main` branch is fully synchronized with the remote `main` branch of the new fork.
+- 2026-05-10: Fixed `pnpm build` failure by adding fallbacks for `PORT` and `BASE_PATH` in `artifacts/mockup-sandbox/vite.config.ts`.
