@@ -4,10 +4,12 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 
 ## Run & Operate
 
-- `pnpm dev` — run the API server and frontend together in development
-- `pnpm dev:api` — run the API server only (port 8080)
-- `pnpm dev:web` — run the frontend only (port 5173)
-- `pnpm start` — serve the production API plus built frontend from one app port
+- `pnpm dev` — local development, with API and Vite running side by side
+- `pnpm dev:api` — API server only (port 8080)
+- `pnpm dev:web` — frontend only (port 5173)
+- `pnpm start` — single-process production runtime, with Express serving the built frontend and all `/api` routes on one app port
+- `pnpm railway:build` — Railway build alias
+- `pnpm railway:start` — Railway start alias
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -16,9 +18,10 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
+- pnpm workspace repo, Node.js 24, TypeScript 5.9
+- Runtime deployment target: one Railway service
 - API: Express 5
-- DB: PostgreSQL + Drizzle ORM
+- DB: Supabase Postgres + Drizzle ORM
 - AI: Groq SDK (LLaMA 3.3 70B — `llama-3.3-70b-versatile`)
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
@@ -59,8 +62,9 @@ AI-powered horse racing predictor for South African races, using Groq LLaMA 3 fo
 
 ## Gotchas
 
-- Frontend workflow port MUST be 5173 (in the Replit supported list). Port 18461 (createArtifact default) was not supported and caused DIDNT_OPEN_A_PORT failures.
-- Production deploy now expects the Express API server to serve `artifacts/aaa-bets/dist/public` on the same app port, with `/api` reserved for JSON routes.
+- Local dev can still use two processes, but Railway production is intentionally one service and one public port.
+- Production deploy expects the Express API server to serve `artifacts/aaa-bets/dist/public` on the same app port, with `/api` reserved for JSON routes.
+- `.replit` is now aligned to the single app server port instead of exposing a separate frontend port.
 - `lib/api-client-react` and `lib/api-zod` export from `./src/index.ts` directly — Vite resolves TypeScript source, requires `fs.strict: false` and `allow: [workspaceRoot]` in vite.config.ts
 - Orval codegen must use `mode: "single"` for zod output
 - On this Windows checkout, missing `@esbuild/win32-x64` blocks Orval React client generation and bundle builds until the optional esbuild binary is repaired.

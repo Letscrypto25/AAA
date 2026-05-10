@@ -15,6 +15,19 @@ async function gqlFetch(query: string): Promise<unknown> {
   return res.json();
 }
 
+function sanitizeGallopLink(value: string | null | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return fallback;
+
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname.endsWith("vercel.app")) return fallback;
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+}
+
 router.get("/gallop/links", async (req, res): Promise<void> => {
   try {
     const data = (await gqlFetch(`{
@@ -32,7 +45,11 @@ router.get("/gallop/links", async (req, res): Promise<void> => {
       }
     }`)) as { data?: { iframe?: Record<string, string | null> } };
 
-    res.json(data?.data?.iframe ?? {});
+    const iframe = data?.data?.iframe ?? {};
+    res.json({
+      ...iframe,
+      galloptvLink: sanitizeGallopLink(iframe.galloptvLink, "https://www.gallop.co.za/"),
+    });
   } catch (err) {
     req.log.warn({ err }, "Failed to fetch Gallop links");
     res.json({
@@ -41,7 +58,7 @@ router.get("/gallop/links", async (req, res): Promise<void> => {
       programmeLink: "https://sahorseracing.co.za/sahr/public.html",
       bettingTabGold: "https://www.tote.co.za",
       SAhorseRacing: "https://sahorseracing.co.za/sahr/public.html",
-      galloptvLink: "https://galloptv-free.vercel.app/",
+      galloptvLink: "https://www.gallop.co.za/",
       affiliatedGoldCircleLink: "https://www.goldcircle.co.za",
       affiliatedNhraLink: "https://www.nhra.co.za",
     });

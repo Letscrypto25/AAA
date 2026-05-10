@@ -8,6 +8,8 @@
     "dev:api": "pnpm --filter @workspace/api-server run dev",
     "dev:web": "pnpm --filter @workspace/aaa-bets run dev",
     "start": "pnpm --filter @workspace/api-server run start",
+    "railway:build": "pnpm build",
+    "railway:start": "pnpm start",
     "codegen": "pnpm --filter @workspace/api-spec run codegen",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
