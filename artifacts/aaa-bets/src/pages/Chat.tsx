@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useGetChatHistory, useSendChatMessage, useGetRaces, useGetDashboardSummary } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGetChatHistoryQueryKey, getGetRacesQueryKey, getGetWeightsQueryKey } from "@workspace/api-client-react";
+import { getGetChatHistoryQueryKey, getGetDashboardSummaryQueryKey, getGetRacesQueryKey, getGetWeightsQueryKey } from "@workspace/api-client-react";
 import { Bot, CalendarDays, Clock3, MessageSquare, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, User, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
@@ -65,6 +65,10 @@ type ChatMutationResult = {
 
 function formatConfidence(value?: number | null) {
   return value == null ? "Forecast pending" : `${Math.round(value * 100)}% confidence`;
+}
+
+function formatRacePrompt(race: { raceNumber: number; name: string; venue: string }) {
+  return `Race ${race.raceNumber} ${race.name} at ${race.venue}`;
 }
 
 export default function Chat() {
@@ -131,6 +135,7 @@ export default function Chat() {
         setLastWeightsUpdate(result.updatedWeights);
         await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
         await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
+        await qc.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
       }
       if (result.actionResults?.length) {
         setLastActionResults(result.actionResults);
@@ -138,6 +143,7 @@ export default function Chat() {
       if (result.updatedWeights || result.actionResults?.some((action) => action.status === "executed")) {
         await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
         await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
+        await qc.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
       }
       await qc.invalidateQueries({ queryKey: getGetChatHistoryQueryKey() });
       setOptimisticMessages([]);
@@ -156,8 +162,8 @@ export default function Chat() {
   const dynamicSuggestions = todayRaces.length > 0
     ? [
         bestBetRace?.topPrediction ? `Why is ${bestBetRace.topPrediction.horseName} the best bet today?` : null,
-        nextUpRace ? `Talk me through ${nextUpRace.name}` : null,
-        focusRace?.topPrediction ? `Who can beat ${focusRace.topPrediction.horseName} in ${focusRace.name}?` : null,
+        nextUpRace ? `Talk me through ${formatRacePrompt(nextUpRace)}` : null,
+        focusRace?.topPrediction ? `Who can beat ${focusRace.topPrediction.horseName} in ${formatRacePrompt(focusRace)}?` : null,
         weeklyOverview[0]?.spotlightRaceName ? `Which race later this week looks strongest?` : null,
         recentModelResult ? `What did the latest ${recentModelResult.topPickCorrect ? "hit" : "miss"} teach the model?` : null,
         `Which jockey has the best book today?`,
@@ -192,11 +198,11 @@ export default function Chat() {
           <select
             value={selectedRaceId ?? ""}
             onChange={(e) => setSelectedRaceId(e.target.value ? Number(e.target.value) : undefined)}
-            className="text-xs bg-card border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring max-w-[160px]"
+            className="text-xs bg-card border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring max-w-[240px]"
           >
             <option value="">All races</option>
             {usableRaces.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
+              <option key={r.id} value={r.id}>{`R${r.raceNumber} ${r.venue} ${r.raceTime} - ${r.name}`}</option>
             ))}
           </select>
         </div>
@@ -262,7 +268,7 @@ export default function Chat() {
           <button
             onClick={() => {
               setSelectedRaceId(nextUpRace.id);
-              setInput(`Talk me through ${nextUpRace.name}`);
+              setInput(`Talk me through ${formatRacePrompt(nextUpRace)}`);
             }}
             className="text-left rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/30 hover:bg-muted/30 transition-colors"
           >

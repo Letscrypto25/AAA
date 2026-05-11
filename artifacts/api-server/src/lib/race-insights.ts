@@ -47,6 +47,8 @@ export type RaceResultSummary = {
 export type RaceSearchContext = {
   text: string;
   horseNames: string[];
+  runnerNumbers: number[];
+  runnerLabels: string[];
   jockeys: string[];
   trainers: string[];
   topPickHorseName: string | null;
@@ -130,6 +132,8 @@ function buildSearchContext(
   result: RaceResultSummary | null,
 ): RaceSearchContext {
   const horseNames = uniqueStrings(horses.map((horse) => horse.name));
+  const runnerNumbers = [...new Set(horses.map((horse) => horse.number).filter((number) => Number.isFinite(number)))];
+  const runnerLabels = horses.map((horse) => `#${horse.number} ${horse.name}`);
   const jockeys = uniqueStrings(horses.map((horse) => horse.jockey));
   const trainers = uniqueStrings(horses.map((horse) => horse.trainer));
   const meetingDate = race.meetingDate ?? "";
@@ -148,6 +152,8 @@ function buildSearchContext(
     result?.winnerHorseName ?? "",
     result?.runnerUpHorseName ?? "",
     result?.thirdHorseName ?? "",
+    runnerLabels.join(" "),
+    runnerNumbers.map((number) => `runner ${number}`).join(" "),
     horseNames.join(" "),
     jockeys.join(" "),
     trainers.join(" "),
@@ -156,6 +162,8 @@ function buildSearchContext(
   return {
     text: searchParts.join(" | "),
     horseNames,
+    runnerNumbers,
+    runnerLabels,
     jockeys,
     trainers,
     topPickHorseName: topPrediction?.horseName ?? null,

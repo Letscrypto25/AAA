@@ -106,7 +106,12 @@ function isSkippableAnalysisError(message: string): boolean {
 type ForecastCard = Awaited<ReturnType<typeof buildRaceForecastCards>>[number];
 
 function normalizeText(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function includesWholePhrase(haystack: string, needle: string): boolean {
@@ -115,30 +120,83 @@ function includesWholePhrase(haystack: string, needle: string): boolean {
   return haystack.includes(normalizedNeedle);
 }
 
-function scoreRaceFocus(message: string, card: ForecastCard): number {
+function extractMentionedNumbers(message: string, pattern: RegExp): Set<number> {
+  const values = new Set<number>();
+  for (const match of message.matchAll(pattern)) {
+    const value = Number.parseInt(match[1] ?? match[2] ?? "", 10);
+    if (Number.isFinite(value)) values.add(value);
+  }
+  return values;
+}
+
+type FocusSignals = {
+  normalizedMessage: string;
+  raceNumbers: Set<number>;
+  runnerNumbers: Set<number>;
+  mentionsToday: boolean;
+  mentionsTomorrow: boolean;
+  mentionsYesterday: boolean;
+};
+
+function buildFocusSignals(message: string): FocusSignals {
   const normalizedMessage = normalizeText(message);
-  if (!normalizedMessage) return 0;
+  return {
+    normalizedMessage,
+    raceNumbers: extractMentionedNumbers(message, /\brace\s*(\d{1,2})\b|\br(\d{1,2})\b/gi),
+    runnerNumbers: extractMentionedNumbers(message, /#\s*(\d{1,2})\b|\b(?:runner|horse|number|no)\s*(\d{1,2})\b/gi),
+    mentionsToday: /\btoday\b/.test(normalizedMessage),
+    mentionsTomorrow: /\btomorrow\b/.test(normalizedMessage),
+    mentionsYesterday: /\byesterday\b/.test(normalizedMessage),
+  };
+}
+
+function scoreRaceFocus(signals: FocusSignals, card: ForecastCard): number {
+  if (!signals.normalizedMessage) return 0;
 
   let score = 0;
 
-  if (normalizedMessage.includes(`race ${card.raceNumber}`)) score += 5;
-  if (normalizedMessage.includes(`r${card.raceNumber}`)) score += 2;
-  if (includesWholePhrase(normalizedMessage, card.name)) score += 6;
-  if (includesWholePhrase(normalizedMessage, card.venue)) score += 2;
-  if (card.grade && includesWholePhrase(normalizedMessage, card.grade)) score += 1;
-  if (card.topPrediction?.horseName && includesWholePhrase(normalizedMessage, card.topPrediction.horseName)) score += 3;
-  if (card.result?.winnerHorseName && includesWholePhrase(normalizedMessage, card.result.winnerHorseName)) score += 3;
+  if (signals.raceNumbers.size > 0) {
+    if (!signals.raceNumbers.has(card.raceNumber)) return -2;
+    score += 8;
+  }
+
+  if (signals.runnerNumbers.size > 0) {
+    const runnerNumbers = new Set(card.searchContext.runnerNumbers ?? []);
+    const runnerMatches = [...signals.runnerNumbers].filter((runnerNumber) => runnerNumbers.has(runnerNumber)).length;
+    if (runnerMatches > 0) {
+      score += runnerMatches * 4;
+    } else if (signals.raceNumbers.has(card.raceNumber)) {
+      score -= 3;
+    }
+  }
+
+  if (signals.mentionsToday) score += card.isToday ? 3 : -1;
+  if (signals.mentionsTomorrow) score += card.dayLabel.toLowerCase() === "tomorrow" ? 3 : -1;
+  if (signals.mentionsYesterday) score += card.dayLabel.toLowerCase() === "yesterday" ? 3 : -1;
+
+  if (signals.normalizedMessage.includes(`race ${card.raceNumber}`)) score += 4;
+  if (signals.normalizedMessage.includes(`r${card.raceNumber}`)) score += 1.5;
+  if (includesWholePhrase(signals.normalizedMessage, card.name)) score += 6;
+  if (includesWholePhrase(signals.normalizedMessage, card.venue)) score += 3;
+  if (includesWholePhrase(signals.normalizedMessage, card.dayLabel)) score += 2;
+  if (card.grade && includesWholePhrase(signals.normalizedMessage, card.grade)) score += 1.5;
+  if (card.topPrediction?.horseName && includesWholePhrase(signals.normalizedMessage, card.topPrediction.horseName)) score += 3.5;
+  if (card.result?.winnerHorseName && includesWholePhrase(signals.normalizedMessage, card.result.winnerHorseName)) score += 3.5;
+
+  for (const runnerLabel of card.searchContext.runnerLabels ?? []) {
+    if (includesWholePhrase(signals.normalizedMessage, runnerLabel)) score += 2.5;
+  }
 
   for (const horseName of card.searchContext.horseNames) {
-    if (includesWholePhrase(normalizedMessage, horseName)) score += 2;
+    if (includesWholePhrase(signals.normalizedMessage, horseName)) score += 2;
   }
 
   for (const jockey of card.searchContext.jockeys) {
-    if (includesWholePhrase(normalizedMessage, jockey)) score += 1;
+    if (includesWholePhrase(signals.normalizedMessage, jockey)) score += 1;
   }
 
   for (const trainer of card.searchContext.trainers) {
-    if (includesWholePhrase(normalizedMessage, trainer)) score += 1;
+    if (includesWholePhrase(signals.normalizedMessage, trainer)) score += 1;
   }
 
   return score;
@@ -146,12 +204,17 @@ function scoreRaceFocus(message: string, card: ForecastCard): number {
 
 function inferFocusRaceId(message: string, cards: ForecastCard[], explicitRaceId?: number): number | undefined {
   if (explicitRaceId) return explicitRaceId;
+  const signals = buildFocusSignals(message);
+  const candidateCards = signals.raceNumbers.size > 0
+    ? cards.filter((card) => signals.raceNumbers.has(card.raceNumber))
+    : cards;
+  if (candidateCards.length === 1) return candidateCards[0]?.id;
 
   let bestScore = 0;
   let bestMatches: number[] = [];
 
-  for (const card of cards) {
-    const score = scoreRaceFocus(message, card);
+  for (const card of candidateCards) {
+    const score = scoreRaceFocus(signals, card);
     if (score <= 0) continue;
 
     if (score > bestScore) {
@@ -165,7 +228,8 @@ function inferFocusRaceId(message: string, cards: ForecastCard[], explicitRaceId
     }
   }
 
-  return bestScore >= 4 && bestMatches.length === 1 ? bestMatches[0] : undefined;
+  const minimumScore = signals.raceNumbers.size > 0 || signals.runnerNumbers.size > 0 ? 5 : 4;
+  return bestScore >= minimumScore && bestMatches.length === 1 ? bestMatches[0] : undefined;
 }
 
 async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId?: number): Promise<string> {
@@ -278,6 +342,7 @@ async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId
     lines.push(
       `FOCUS RACE: Race ${focusCard.raceNumber} ${focusCard.name} | ${focusCard.venue} ${focusCard.raceTime} | ${focusCard.distance}m ${focusCard.surface} | status ${focusCard.status}`,
     );
+    lines.push("RUNNER NUMBERS: treat the #number beside each horse as the source of truth and do not renumber them.");
 
     for (const horse of horses) {
       const prediction = predictions.find((item) => item.horseId === horse.id);

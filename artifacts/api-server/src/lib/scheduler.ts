@@ -5,6 +5,7 @@ import { getMinutesToRace, getRaceTimeProfile } from "./race-time";
 
 const FIVE_MIN_MS = 5 * 60 * 1000;
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const RESULT_RETRY_WINDOW_MINUTES = 24 * 60;
 
 export function getNextUpdateTime(raceTime: string, meetingDate?: string | null): Date {
   const profile = getRaceTimeProfile(raceTime, meetingDate);
@@ -58,9 +59,9 @@ export function startScheduler() {
 
       for (const race of dueRaces) {
         const minutesToRace = getMinutesToRace(race.raceTime, race.meetingDate);
-        if (minutesToRace !== null && minutesToRace < -180) continue;
+        if (minutesToRace !== null && minutesToRace < -RESULT_RETRY_WINDOW_MINUTES) continue;
 
-        if (refreshOddsCallback && minutesToRace !== null && minutesToRace <= 6 * 60 && minutesToRace >= -180) {
+        if (refreshOddsCallback && minutesToRace !== null && minutesToRace <= 6 * 60 && minutesToRace >= -RESULT_RETRY_WINDOW_MINUTES) {
           try {
             await refreshOddsCallback(race.id);
           } catch (err) {

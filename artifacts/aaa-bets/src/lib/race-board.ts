@@ -1,6 +1,8 @@
 type SearchContext = {
   text?: string;
   horseNames?: string[];
+  runnerNumbers?: number[];
+  runnerLabels?: string[];
   jockeys?: string[];
   trainers?: string[];
   topPickHorseName?: string | null;

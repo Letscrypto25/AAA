@@ -50,6 +50,7 @@ export interface WeightConfig {
 
 export interface HorsePrediction {
   horseIndex: number;
+  runnerNumber?: number;
   score: number;
   confidence: number;
   factors: {
@@ -284,12 +285,14 @@ WEIGHTING FACTORS:
 - History (overall historical performance at this level): ${(weights.history * 100).toFixed(0)}%
 
 For each horse provide factor scores (0.0-1.0), overall weighted score, confidence, and 1-sentence analysis.
+Use the official runner number shown as #N as the horse identity. Keep that runner number exact and return it in the JSON.
 
 Respond with ONLY valid JSON:
 {
   "predictions": [
     {
       "horseIndex": 0,
+      "runnerNumber": 4,
       "factors": { "courseForm": 0.7, "formDistance": 0.8, "jockeyTrainer": 0.9, "oddsMovement": 0.6, "history": 0.75, "overall": 0.77 },
       "score": 0.77,
       "confidence": 0.72,
@@ -309,14 +312,24 @@ Respond with ONLY valid JSON:
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON found in response");
   const parsed = JSON.parse(jsonMatch[0]) as { predictions: HorsePrediction[] };
+  const seenHorseIndexes = new Set<number>();
 
-  return parsed.predictions
-    .filter((p) => p.horseIndex >= 0 && p.horseIndex < activeHorses.length)
-    .map((prediction) => {
-      const activeHorse = activeHorses[prediction.horseIndex];
-      const realIndex = horses.findIndex((horse) => horse.name === activeHorse.name);
-      return { ...prediction, horseIndex: realIndex >= 0 ? realIndex : prediction.horseIndex };
-    });
+  return parsed.predictions.flatMap((prediction) => {
+    const runnerNumber = Number(prediction.runnerNumber);
+    const activeHorse = Number.isFinite(runnerNumber)
+      ? activeHorses.find((horse) => horse.number === runnerNumber)
+      : prediction.horseIndex >= 0 && prediction.horseIndex < activeHorses.length
+        ? activeHorses[prediction.horseIndex]
+        : undefined;
+
+    if (!activeHorse) return [];
+
+    const realIndex = horses.findIndex((horse) => horse.number === activeHorse.number);
+    if (realIndex < 0 || seenHorseIndexes.has(realIndex)) return [];
+
+    seenHorseIndexes.add(realIndex);
+    return [{ ...prediction, horseIndex: realIndex, runnerNumber: activeHorse.number }];
+  });
 }
 
 export interface ChatWeightSuggestion {
@@ -532,6 +545,7 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - When the user asks what is going on, summarise the current live races, standout horse, model edge, and recent result lessons from the FORECAST CONTEXT
 - If the user asks to set, change, increase, decrease, or rebalance weights, either confirm the new mix or recommend one, and include the weights tag
 - When suggesting weight changes, include the weights tag
+- Runner numbers shown in the FORECAST CONTEXT are authoritative; preserve the exact #number when discussing a horse
 - Never claim a sync or forecast refresh has already happened unless the app confirms it afterwards
 - If the user explicitly asks you to run a sync or forecast refresh, keep the prose brief and append the control tag
 - Keep responses focused - do not pad

@@ -64,6 +64,41 @@ function mapRaceStatus(detail: ToteRace): string {
   return "upcoming";
 }
 
+type OfficialResultSyncOutcome = "none" | "recorded" | "already-recorded" | "pending";
+
+function getSyncedRaceStatus(
+  race: typeof racesTable.$inferSelect,
+  detail: ToteRace,
+  resultOutcome: OfficialResultSyncOutcome,
+): { status: string; nextUpdateAt: Date | null } {
+  const feedStatus = mapRaceStatus(detail);
+  if (feedStatus === "cancelled") {
+    return {
+      status: "cancelled",
+      nextUpdateAt: null,
+    };
+  }
+
+  if (resultOutcome === "recorded" || resultOutcome === "already-recorded") {
+    return {
+      status: "completed",
+      nextUpdateAt: null,
+    };
+  }
+
+  if (hasOfficialResult(detail)) {
+    return {
+      status: "analyzing",
+      nextUpdateAt: getNextUpdateTime(race.raceTime, race.meetingDate),
+    };
+  }
+
+  return {
+    status: race.status === "completed" ? "analyzing" : feedStatus,
+    nextUpdateAt: getNextUpdateTime(race.raceTime, race.meetingDate),
+  };
+}
+
 async function findRace(program: ToteProgram, detail: ToteRace): Promise<typeof racesTable.$inferSelect | null> {
   const venue = toDisplayVenue(program, detail);
   const raceNumber = parseRaceNumber(detail);
@@ -183,17 +218,23 @@ async function syncRaceHorses(raceId: number, detail: ToteRace): Promise<void> {
   }
 }
 
-async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<void> {
-  if (!hasOfficialResult(detail)) return;
+async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<OfficialResultSyncOutcome> {
+  if (!hasOfficialResult(detail)) return "none";
 
   const existingResult = await db.select().from(raceResultsTable).where(eq(raceResultsTable.raceId, raceId)).limit(1);
-  if (existingResult.length > 0) return;
+  if (existingResult.length > 0) return "already-recorded";
 
   const resultRows = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
   const horseByNumber = new Map(resultRows.map((horse) => [horse.number, horse]));
   const placings = getOfficialPlacings(detail);
   const winner = placings.winner ? horseByNumber.get(placings.winner) : null;
-  if (!winner) return;
+  if (!winner) {
+    logger.warn(
+      { raceId, placings, availableRunnerNumbers: [...horseByNumber.keys()] },
+      "Official result detected but runner mapping is incomplete; keeping race retryable",
+    );
+    return "pending";
+  }
 
   try {
     await recordRaceResult(raceId, {
@@ -202,10 +243,12 @@ async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<voi
       thirdHorseId: placings.third ? horseByNumber.get(placings.third)?.id ?? null : null,
       notes: "Official Tote/4Racing result sync",
     });
+    return "recorded";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (message === "Result already recorded") return;
+    if (message === "Result already recorded") return "already-recorded";
     logger.warn({ err, raceId }, "Official result sync failed");
+    return "pending";
   }
 }
 
@@ -225,9 +268,17 @@ async function syncRace(program: ToteProgram, detail: ToteRace): Promise<{ creat
 
   const { race, created } = await upsertRace(program, detail);
   await syncRaceHorses(race.id, detail);
-  await syncOfficialResult(race.id, detail);
+  const resultOutcome = await syncOfficialResult(race.id, detail);
+  const syncedState = getSyncedRaceStatus(race, detail, resultOutcome);
+  await db
+    .update(racesTable)
+    .set({
+      status: syncedState.status,
+      nextUpdateAt: syncedState.nextUpdateAt,
+    })
+    .where(eq(racesTable.id, race.id));
 
-  if (mapRaceStatus(detail) === "completed") {
+  if (hasOfficialResult(detail) || syncedState.status === "cancelled") {
     return { created };
   }
 
@@ -329,11 +380,13 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
     if (!detail) continue;
 
     await syncRaceHorses(raceId, detail);
-    await syncOfficialResult(raceId, detail);
+    const resultOutcome = await syncOfficialResult(raceId, detail);
+    const syncedState = getSyncedRaceStatus(race, detail, resultOutcome);
     await db
       .update(racesTable)
       .set({
-        nextUpdateAt: mapRaceStatus(detail) === "completed" ? null : getNextUpdateTime(race.raceTime, race.meetingDate),
+        status: syncedState.status,
+        nextUpdateAt: syncedState.nextUpdateAt,
       })
       .where(eq(racesTable.id, raceId));
 

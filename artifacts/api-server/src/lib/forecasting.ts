@@ -273,6 +273,7 @@ function buildFallbackPredictions(
 
     return {
       horseIndex: index,
+      runnerNumber: horse.number,
       score: round(overall),
       confidence: round(clamp(0.2 + overall * 0.34 + coverageScore * 0.14 + marketScores.marketStrength * 0.1, 0.22, 0.72)),
       factors: {
@@ -280,6 +281,63 @@ function buildFallbackPredictions(
         overall: round(overall),
       },
       aiSummary: "Fallback scoring blended recency-weighted form, market shape, and venue-distance fit.",
+    };
+  });
+}
+
+function blendFactorValue(aiValue: number, fallbackValue: number, aiWeight: number): number {
+  return round(clamp(aiValue * aiWeight + fallbackValue * (1 - aiWeight), 0, 1));
+}
+
+function mergeModelPredictions(
+  aiPredictions: HorsePrediction[],
+  fallbackPredictions: HorsePrediction[],
+): HorsePrediction[] {
+  const fallbackByHorseIndex = new Map(fallbackPredictions.map((prediction) => [prediction.horseIndex, prediction]));
+  const aiByHorseIndex = new Map<number, HorsePrediction>();
+
+  for (const prediction of aiPredictions) {
+    const fallback = fallbackByHorseIndex.get(prediction.horseIndex);
+    if (!fallback) continue;
+
+    const existing = aiByHorseIndex.get(prediction.horseIndex);
+    if (!existing || clamp(prediction.score, 0, 1) > clamp(existing.score, 0, 1)) {
+      aiByHorseIndex.set(prediction.horseIndex, prediction);
+    }
+  }
+
+  return fallbackPredictions.map((fallbackPrediction) => {
+    const aiPrediction = aiByHorseIndex.get(fallbackPrediction.horseIndex);
+    if (!aiPrediction) return fallbackPrediction;
+
+    const aiFactors = sanitizeFactorBreakdown(aiPrediction.factors as PredictionFactorBreakdown, aiPrediction.score);
+    const fallbackFactors = sanitizeFactorBreakdown(fallbackPrediction.factors as PredictionFactorBreakdown, fallbackPrediction.score);
+    const aiWeight = aiPrediction.aiSummary?.trim() ? 0.58 : 0.52;
+    const blendedScore = clamp(
+      clamp(aiPrediction.score, 0, 1) * aiWeight + clamp(fallbackPrediction.score, 0, 1) * (1 - aiWeight),
+      0.08,
+      0.99,
+    );
+    const blendedConfidence = clamp(
+      clamp(aiPrediction.confidence, 0.12, 0.88) * 0.45 + clamp(fallbackPrediction.confidence, 0.12, 0.88) * 0.55,
+      0.18,
+      0.78,
+    );
+
+    return {
+      horseIndex: fallbackPrediction.horseIndex,
+      runnerNumber: aiPrediction.runnerNumber ?? fallbackPrediction.runnerNumber,
+      score: round(blendedScore),
+      confidence: round(blendedConfidence),
+      factors: {
+        courseForm: blendFactorValue(aiFactors.courseForm, fallbackFactors.courseForm, aiWeight),
+        formDistance: blendFactorValue(aiFactors.formDistance, fallbackFactors.formDistance, aiWeight),
+        jockeyTrainer: blendFactorValue(aiFactors.jockeyTrainer, fallbackFactors.jockeyTrainer, aiWeight),
+        oddsMovement: blendFactorValue(aiFactors.oddsMovement, fallbackFactors.oddsMovement, aiWeight),
+        history: blendFactorValue(aiFactors.history, fallbackFactors.history, aiWeight),
+        overall: round(blendedScore),
+      },
+      aiSummary: aiPrediction.aiSummary?.trim() || fallbackPrediction.aiSummary,
     };
   });
 }
@@ -421,10 +479,11 @@ export async function runRaceForecast(
     learningSnapshot.factorAdjustments,
     learningSnapshot.sampleSize,
   );
+  const fallbackPredictions = buildFallbackPredictions(horses, adaptiveWeights);
 
   let rawPredictions: HorsePrediction[];
   try {
-    rawPredictions = await analyzeRaceWithAI(
+    const aiPredictions = await analyzeRaceWithAI(
       {
         name: race.name,
         venue: race.venue,
@@ -452,9 +511,10 @@ export async function runRaceForecast(
       })),
       adaptiveWeights,
     );
+    rawPredictions = mergeModelPredictions(aiPredictions, fallbackPredictions);
   } catch (err) {
     logger.warn({ err, raceId }, "AI race analysis failed, using fallback model");
-    rawPredictions = buildFallbackPredictions(horses, adaptiveWeights);
+    rawPredictions = fallbackPredictions;
   }
 
   const decorated = decoratePredictions(rawPredictions, learningSnapshot, race.raceTime, race.meetingDate);
