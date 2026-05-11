@@ -11,6 +11,7 @@ import FormGuide from "@/pages/FormGuide";
 import Chat from "@/pages/Chat";
 import Weights from "@/pages/Weights";
 import { cn } from "@/lib/utils";
+import PwaInstallBanner from "@/components/PwaInstallBanner";
 import {
   LayoutDashboard,
   Trophy,
@@ -91,6 +92,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
         </header>
+        <PwaInstallBanner />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>
     </div>

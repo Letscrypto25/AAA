@@ -8,4 +8,14 @@ if (apiUrl) {
   setBaseUrl(apiUrl);
 }
 
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    const base = import.meta.env.BASE_URL || "/";
+    const serviceWorkerUrl = `${base.replace(/\/$/, "/")}sw.js`;
+    navigator.serviceWorker.register(serviceWorkerUrl).catch(() => {
+      // best-effort PWA registration
+    });
+  });
+}
+
 createRoot(document.getElementById("root")!).render(<App />);
