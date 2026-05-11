@@ -27,10 +27,10 @@ const queryClient = new QueryClient({
 });
 
 const NAV = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/", label: "Home", icon: LayoutDashboard },
   { href: "/races", label: "Races", icon: Trophy },
-  { href: "/form-guide", label: "Form Guide", icon: BookOpen },
-  { href: "/chat", label: "AI Chat", icon: MessageSquare },
+  { href: "/form-guide", label: "Guide", icon: BookOpen },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/weights", label: "Weights", icon: SlidersHorizontal },
 ];
 
@@ -57,10 +57,13 @@ function NavItem({ href, label, icon: Icon }: { href: string; label: string; ico
 function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-background">
-      <aside className="hidden md:flex flex-col w-56 bg-sidebar border-r border-sidebar-border shrink-0">
+      <aside className="hidden md:flex flex-col w-60 bg-sidebar border-r border-sidebar-border shrink-0">
         <div className="flex items-center gap-2.5 px-4 h-14 border-b border-sidebar-border">
           <TrendingUp className="size-5 text-primary" />
-          <span className="font-bold text-sidebar-foreground tracking-tight">AAA Bets</span>
+          <div>
+            <span className="block font-bold text-sidebar-foreground tracking-tight">AAA Bets</span>
+            <span className="block text-[11px] text-muted-foreground">Simple race board</span>
+          </div>
         </div>
         <nav className="flex-1 p-3 space-y-1">
           {NAV.map((n) => (
@@ -68,7 +71,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="p-3 border-t border-sidebar-border">
-          <p className="text-xs text-muted-foreground text-center">Powered by Groq LLaMA&nbsp;3</p>
+          <p className="text-xs text-muted-foreground text-center">Live cards, forecasts, and weights</p>
         </div>
       </aside>
 

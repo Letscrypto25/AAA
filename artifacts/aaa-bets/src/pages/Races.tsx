@@ -316,6 +316,7 @@ function AddRaceModal({ onClose }: { onClose: () => void }) {
 export default function Races() {
   const { data: raceResponse, isLoading } = useGetRaces();
   const races = (raceResponse ?? []) as RaceCard[];
+  const usableRaces = races.filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<RaceFilter>("all");
   const [showAdd, setShowAdd] = useState(false);
@@ -323,7 +324,7 @@ export default function Races() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
 
-    return races
+    return usableRaces
       .filter((race) => {
         if (filter === "today" && !race.isToday) return false;
         if (filter === "week" && !race.isThisWeek) return false;
@@ -331,12 +332,7 @@ export default function Races() {
         if (filter === "completed" && race.status !== "completed") return false;
 
         if (!term) return true;
-        return [
-          race.name,
-          race.venue,
-          race.topPrediction?.horseName ?? "",
-          race.dayLabel,
-        ]
+        return [race.name, race.venue, race.topPrediction?.horseName ?? "", race.dayLabel]
           .join(" ")
           .toLowerCase()
           .includes(term);
@@ -346,28 +342,29 @@ export default function Races() {
         const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
         return leftMinutes - rightMinutes || right.prominence - left.prominence;
       });
-  }, [filter, races, search]);
+  }, [filter, search, usableRaces]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
       {showAdd && <AddRaceModal onClose={() => setShowAdd(false)} />}
 
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-foreground">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Races</p>
+          <h1 className="mt-1 flex items-center gap-2 text-3xl font-semibold text-foreground">
             <Trophy className="size-6 text-primary" />
-            Races
+            Weekly card
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Weekly card view with forecast confidence, timing, and graded results
+            A simpler list of live races, top picks, and recorded results.
           </p>
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
         >
           <Plus className="size-4" />
-          Add Race
+          Add race
         </button>
       </div>
 
@@ -379,7 +376,7 @@ export default function Races() {
             placeholder="Search races, venues, or top picks..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            className="w-full rounded-lg border border-card-border bg-card py-2.5 pl-9 pr-4 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-xl border border-card-border bg-card py-3 pl-9 pr-4 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -400,39 +397,32 @@ export default function Races() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Loaded</p>
-          <p className="mt-2 text-2xl font-bold text-foreground">{races.length}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Races currently stored in the weekly card</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Visible now</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Only races with real runners, picks, or results</p>
         </div>
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Today</p>
-          <p className="mt-2 text-2xl font-bold text-foreground">
-            {races.filter((race) => race.isToday).length}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">Current-day races with live forecast relevance</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Today</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.filter((race) => race.isToday).length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Current-day races ready to read quickly</p>
         </div>
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Completed</p>
-          <p className="mt-2 text-2xl font-bold text-foreground">
-            {races.filter((race) => race.status === "completed").length}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">Races already graded back into the model</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Completed</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.filter((race) => race.status === "completed").length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Results already graded back into the model</p>
         </div>
       </div>
 
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((item) => (
-            <div
-              key={item}
-              className="h-28 animate-pulse rounded-xl border border-card-border bg-card"
-            />
+            <div key={item} className="h-28 animate-pulse rounded-2xl border border-card-border bg-card" />
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-xl border border-card-border bg-card p-12 text-center">
+        <div className="rounded-2xl border border-card-border bg-card p-12 text-center">
           <CalendarDays className="mx-auto mb-3 size-10 text-muted-foreground" />
           <p className="font-medium text-foreground">No races match this view</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -443,48 +433,36 @@ export default function Races() {
         <div className="space-y-3">
           {filtered.map((race) => (
             <Link key={race.id} href={`/races/${race.id}`}>
-              <div className="cursor-pointer rounded-xl border border-card-border bg-card px-5 py-4 transition-colors hover:border-primary/40">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="cursor-pointer rounded-2xl border border-card-border bg-card px-5 py-4 transition-colors hover:border-primary/40 hover:bg-muted/20">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                        Race {race.raceNumber}
-                      </span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {race.dayLabel}
-                      </span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {formatConfidenceBand(race.forecastBand)}
-                      </span>
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Race {race.raceNumber}</span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.dayLabel}</span>
+                      {race.grade && <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.grade}</span>}
                       {race.result && (
                         <span
                           className={cn(
-                            "rounded-full border px-2 py-0.5 text-xs font-medium",
-                            race.result.topPickCorrect
-                              ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-300"
-                              : "border-rose-400/30 bg-rose-500/15 text-rose-300",
+                            "rounded-full px-2 py-0.5 text-xs font-medium",
+                            race.result.topPickCorrect ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300",
                           )}
                         >
-                          {race.result.topPickCorrect ? "Top pick hit" : "Top pick missed"}
+                          {race.result.topPickCorrect ? "Hit" : "Miss"}
                         </span>
                       )}
                     </div>
 
                     <p className="mt-2 truncate text-lg font-semibold text-foreground">{race.name}</p>
-                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Clock className="size-3" />
-                        {race.raceTime}
-                      </span>
+                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                      <span className="flex items-center gap-1"><Clock className="size-3.5" />{race.raceTime}</span>
                       <span>{race.venue}</span>
                       <span>{race.distance}m {race.surface}</span>
                       <span>{formatMinutesToRace(race.minutesToRace)}</span>
-                      {race.grade && <span className="font-medium text-foreground">{race.grade}</span>}
                     </p>
 
                     {race.topPredictions.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {race.topPredictions.map((prediction: RacePredictionSummary) => (
+                        {race.topPredictions.slice(0, 2).map((prediction: RacePredictionSummary) => (
                           <span
                             key={prediction.id}
                             className={cn(
@@ -501,16 +479,12 @@ export default function Races() {
                     )}
                   </div>
 
-                  <div className="flex items-start gap-3 lg:min-w-[220px] lg:justify-end">
+                  <div className="flex items-center gap-3 lg:min-w-[230px] lg:justify-end">
                     <div className="min-w-0 text-left lg:text-right">
                       {race.result ? (
                         <>
-                          <p className="text-sm font-semibold text-foreground">
-                            Winner: {race.result.winnerHorseName}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Recorded {new Date(race.result.recordedAt).toLocaleString()}
-                          </p>
+                          <p className="text-sm font-semibold text-foreground">Winner: {race.result.winnerHorseName}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Recorded result</p>
                         </>
                       ) : race.topPrediction ? (
                         <>
@@ -519,14 +493,14 @@ export default function Races() {
                             {race.topPrediction.horseName}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {Math.round(race.topPrediction.confidence * 100)}% confidence
+                            {Math.round(race.topPrediction.confidence * 100)}% confidence · {formatConfidenceBand(race.forecastBand)}
                           </p>
                         </>
                       ) : (
-                        <p className="text-xs text-muted-foreground">Forecast pending</p>
+                        <p className="text-sm text-muted-foreground">Forecast pending</p>
                       )}
                     </div>
-                    <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                   </div>
                 </div>
               </div>
