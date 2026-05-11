@@ -58,14 +58,19 @@ export function startScheduler() {
 
       for (const race of dueRaces) {
         const minutesToRace = getMinutesToRace(race.raceTime, race.meetingDate);
-        if (minutesToRace !== null && minutesToRace < -30) continue;
+        if (minutesToRace !== null && minutesToRace < -180) continue;
 
-        if (refreshOddsCallback && minutesToRace !== null && minutesToRace > 0 && minutesToRace <= 6 * 60) {
+        if (refreshOddsCallback && minutesToRace !== null && minutesToRace <= 6 * 60 && minutesToRace >= -180) {
           try {
             await refreshOddsCallback(race.id);
           } catch (err) {
             logger.error({ err, raceId: race.id }, "Odds refresh failed before scheduled analysis");
           }
+        }
+
+        if (minutesToRace !== null && minutesToRace <= 0) {
+          logger.info({ raceId: race.id, raceName: race.name, minutesToRace }, "Post-race result refresh triggered");
+          continue;
         }
 
         if (analyzeCallback) {

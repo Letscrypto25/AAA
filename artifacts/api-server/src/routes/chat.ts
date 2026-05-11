@@ -103,6 +103,71 @@ function isSkippableAnalysisError(message: string): boolean {
   return message === "Race already graded or closed" || message === "No horses in this race";
 }
 
+type ForecastCard = Awaited<ReturnType<typeof buildRaceForecastCards>>[number];
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function includesWholePhrase(haystack: string, needle: string): boolean {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 2) return false;
+  return haystack.includes(normalizedNeedle);
+}
+
+function scoreRaceFocus(message: string, card: ForecastCard): number {
+  const normalizedMessage = normalizeText(message);
+  if (!normalizedMessage) return 0;
+
+  let score = 0;
+
+  if (normalizedMessage.includes(`race ${card.raceNumber}`)) score += 5;
+  if (normalizedMessage.includes(`r${card.raceNumber}`)) score += 2;
+  if (includesWholePhrase(normalizedMessage, card.name)) score += 6;
+  if (includesWholePhrase(normalizedMessage, card.venue)) score += 2;
+  if (card.grade && includesWholePhrase(normalizedMessage, card.grade)) score += 1;
+  if (card.topPrediction?.horseName && includesWholePhrase(normalizedMessage, card.topPrediction.horseName)) score += 3;
+  if (card.result?.winnerHorseName && includesWholePhrase(normalizedMessage, card.result.winnerHorseName)) score += 3;
+
+  for (const horseName of card.searchContext.horseNames) {
+    if (includesWholePhrase(normalizedMessage, horseName)) score += 2;
+  }
+
+  for (const jockey of card.searchContext.jockeys) {
+    if (includesWholePhrase(normalizedMessage, jockey)) score += 1;
+  }
+
+  for (const trainer of card.searchContext.trainers) {
+    if (includesWholePhrase(normalizedMessage, trainer)) score += 1;
+  }
+
+  return score;
+}
+
+function inferFocusRaceId(message: string, cards: ForecastCard[], explicitRaceId?: number): number | undefined {
+  if (explicitRaceId) return explicitRaceId;
+
+  let bestScore = 0;
+  let bestMatches: number[] = [];
+
+  for (const card of cards) {
+    const score = scoreRaceFocus(message, card);
+    if (score <= 0) continue;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatches = [card.id];
+      continue;
+    }
+
+    if (score === bestScore) {
+      bestMatches.push(card.id);
+    }
+  }
+
+  return bestScore >= 4 && bestMatches.length === 1 ? bestMatches[0] : undefined;
+}
+
 async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId?: number): Promise<string> {
   const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
   const cards = (await buildRaceForecastCards(allRaces)).filter((card) => card.horseCount > 0 || !!card.result);
@@ -128,6 +193,7 @@ async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId
 
   const liveCards = sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard));
   const todayCards = liveCards.filter((card) => card.isToday);
+  const nonTodayLiveCards = liveCards.filter((card) => !card.isToday);
   const historyCards = sortRaceCardsByHistoryPriority(cards.filter(isRaceHistoryCard));
   const weeklyOverview = buildWeeklyOverview(cards);
   const focusCard = focusRaceId
@@ -167,9 +233,19 @@ async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId
     lines.push("LIVE CARD: no live today races are loaded right now.");
   } else {
     lines.push("LIVE CARD:");
-    for (const card of todayCards.slice(0, 8)) {
+    for (const card of todayCards) {
       lines.push(
         `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | status ${card.status} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}% ${card.topPrediction.confidenceBand}` : "forecast pending"}`,
+      );
+    }
+  }
+
+  if (nonTodayLiveCards.length > 0) {
+    lines.push("");
+    lines.push("UPCOMING THIS WEEK:");
+    for (const card of nonTodayLiveCards.slice(0, 12)) {
+      lines.push(
+        `- Race ${card.raceNumber} ${card.name} | ${card.dayLabel} | ${card.venue} ${card.raceTime} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}%` : "forecast pending"}`,
       );
     }
   }
@@ -388,12 +464,16 @@ router.post("/chat", async (req, res): Promise<void> => {
     content: chatMessage.content,
   }));
 
-  const raceDayBriefing = await buildForecastBriefing(currentWeights, raceId ?? undefined);
+  const focusCards = await buildRaceForecastCards(
+    await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime),
+  );
+  const resolvedRaceId = inferFocusRaceId(message, focusCards, raceId ?? undefined);
+  const raceDayBriefing = await buildForecastBriefing(currentWeights, resolvedRaceId);
 
   await db.insert(chatMessagesTable).values({
     role: "user",
     content: message,
-    raceId: raceId ?? null,
+    raceId: resolvedRaceId ?? null,
   });
 
   let aiResult: {
@@ -403,9 +483,9 @@ router.post("/chat", async (req, res): Promise<void> => {
   };
 
   try {
-    aiResult = await chatWithAI(message, currentWeights, history, raceDayBriefing, Boolean(raceId));
+    aiResult = await chatWithAI(message, currentWeights, history, raceDayBriefing, Boolean(resolvedRaceId));
   } catch {
-    const inferred = inferChatControlsFromMessage(message, currentWeights, Boolean(raceId));
+    const inferred = inferChatControlsFromMessage(message, currentWeights, Boolean(resolvedRaceId));
     aiResult = {
       reply: inferred.actionSuggestions.length > 0 || inferred.weightSuggestions
         ? "The AI connection is unavailable, but I can still run the requested in-app control."
@@ -431,7 +511,7 @@ router.post("/chat", async (req, res): Promise<void> => {
     updatedWeights = updated ? { ...updated, updatedAt: updated.updatedAt.toISOString() } : null;
   }
 
-  const { actionResults, triggeredAnalysis } = await executeChatActions(aiResult.actionSuggestions, raceId ?? null);
+  const { actionResults, triggeredAnalysis } = await executeChatActions(aiResult.actionSuggestions, resolvedRaceId ?? null);
 
   const confirmationLines: string[] = [];
   if (updatedWeights) {
@@ -448,7 +528,7 @@ router.post("/chat", async (req, res): Promise<void> => {
   await db.insert(chatMessagesTable).values({
     role: "assistant",
     content: finalReply,
-    raceId: raceId ?? null,
+    raceId: resolvedRaceId ?? null,
   });
 
   res.json({
