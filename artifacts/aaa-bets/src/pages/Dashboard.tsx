@@ -12,6 +12,7 @@ import {
   CalendarDays,
   CheckCircle,
   Clock,
+  Download,
   RefreshCw,
   Sparkles,
   Target,
@@ -181,6 +182,24 @@ export default function Dashboard() {
           {analyzingToday ? `Analyzing ${analyzableTodayRaces.length}...` : `Analyze today (${analyzableTodayRaces.length})`}
         </button>
       </div>
+
+      <Link href="/install">
+        <div className="cursor-pointer rounded-2xl border border-primary/20 bg-primary/10 p-5 transition-colors hover:bg-primary/15">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Install AAA</p>
+              <h2 className="mt-2 text-xl font-semibold text-foreground">Download it like an app</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Install on desktop, Android, or iPhone home screen with a cleaner standalone layout.
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-xl bg-background/80 px-4 py-2 text-sm font-medium text-foreground">
+              <Download className="size-4 text-primary" />
+              Open install guide
+            </div>
+          </div>
+        </div>
+      </Link>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Today" value={summary?.todayRaceCount ?? 0} note="Live races on today’s card" />

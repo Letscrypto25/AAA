@@ -10,12 +10,14 @@ import RaceDetail from "@/pages/RaceDetail";
 import FormGuide from "@/pages/FormGuide";
 import Chat from "@/pages/Chat";
 import Weights from "@/pages/Weights";
+import InstallApp from "@/pages/InstallApp";
 import { cn } from "@/lib/utils";
 import PwaInstallBanner from "@/components/PwaInstallBanner";
 import {
   LayoutDashboard,
   Trophy,
   BookOpen,
+  Download,
   MessageSquare,
   SlidersHorizontal,
   TrendingUp,
@@ -33,6 +35,7 @@ const NAV = [
   { href: "/form-guide", label: "Guide", icon: BookOpen },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/weights", label: "Weights", icon: SlidersHorizontal },
+  { href: "/install", label: "Install", icon: Download },
 ];
 
 function NavItem({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) {
@@ -109,6 +112,7 @@ function Router() {
         <Route path="/form-guide" component={FormGuide} />
         <Route path="/chat" component={Chat} />
         <Route path="/weights" component={Weights} />
+        <Route path="/install" component={InstallApp} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
