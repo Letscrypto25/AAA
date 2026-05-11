@@ -40,6 +40,11 @@ app.listen(port, async (err) => {
         jockeyTrainer: 0,
         oddsMovement: 0,
         history: 0,
+        fieldStrength: 0,
+        weightCarried: 0,
+        surfaceFit: 0,
+        paceProfile: 0,
+        priceValue: 0,
       },
     });
     logger.info("Learning feedback store seeded");

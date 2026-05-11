@@ -46,6 +46,12 @@ export interface WeightConfig {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  // New factors
+  fieldStrength?: number;
+  weightCarried?: number;
+  surfaceFit?: number;
+  paceProfile?: number;
+  priceValue?: number;
 }
 
 export interface HorsePrediction {
@@ -59,6 +65,12 @@ export interface HorsePrediction {
     jockeyTrainer: number;
     oddsMovement: number;
     history: number;
+    // New factors (populated by fallback model, not AI)
+    fieldStrength?: number;
+    weightCarried?: number;
+    surfaceFit?: number;
+    paceProfile?: number;
+    priceValue?: number;
     overall: number;
   };
   aiSummary: string;
@@ -277,12 +289,12 @@ Date: ${race.meetingDate ?? "today"}
 HORSES:
 ${horseDescriptions}
 
-WEIGHTING FACTORS:
-- Course Form (horse's record at this venue): ${(weights.courseForm * 100).toFixed(0)}%
-- Form & Distance (recent form + suitability for this distance): ${(weights.formDistance * 100).toFixed(0)}%
-- Jockey/Trainer (quality of booking, partnership record): ${(weights.jockeyTrainer * 100).toFixed(0)}%
-- Odds Movement (market intelligence - shortening = confidence): ${(weights.oddsMovement * 100).toFixed(0)}%
-- History (overall historical performance at this level): ${(weights.history * 100).toFixed(0)}%
+WEIGHTING FACTORS (score each 0.0–1.0):
+- Course Form (record at this venue): ${(weights.courseForm * 100).toFixed(0)}%
+- Form & Distance (recent form + trip suitability): ${(weights.formDistance * 100).toFixed(0)}%
+- Jockey/Trainer (booking quality, partnership strike rate): ${(weights.jockeyTrainer * 100).toFixed(0)}%
+- Odds Movement (shortening = market confidence): ${(weights.oddsMovement * 100).toFixed(0)}%
+- History (class, career record): ${(weights.history * 100).toFixed(0)}%
 
 For each horse provide factor scores (0.0-1.0), overall weighted score, confidence, and 1-sentence analysis.
 Use the official runner number shown as #N as the horse identity. Keep that runner number exact and return it in the JSON.
@@ -296,7 +308,7 @@ Respond with ONLY valid JSON:
       "factors": { "courseForm": 0.7, "formDistance": 0.8, "jockeyTrainer": 0.9, "oddsMovement": 0.6, "history": 0.75, "overall": 0.77 },
       "score": 0.77,
       "confidence": 0.72,
-      "aiSummary": "Strong course performer with a top jockey booking."
+      "aiSummary": "Strong course performer with a top jockey booking and shortening market."
     }
   ]
 }`;
@@ -379,7 +391,7 @@ function normalizeWeights(weights: WeightConfig): WeightConfig {
 
 function buildSingleFactorAdjustment(currentWeights: WeightConfig, key: keyof WeightConfig, delta: number): WeightConfig {
   const next = { ...currentWeights };
-  next[key] = Math.min(0.6, Math.max(0.05, next[key] + delta));
+  next[key] = Math.min(0.6, Math.max(0.05, (next[key] ?? 0.1) + delta));
 
   const others = WEIGHT_KEYS.filter((candidate) => candidate !== key);
   const otherTotal = others.reduce((sum, candidate) => sum + currentWeights[candidate], 0);
@@ -521,18 +533,23 @@ The live FORECAST CONTEXT below is the source of truth. If older chat history co
 - Best bet selection: Give a confident single best bet or each-way selection with clear reasoning
 - Jockey and trainer intelligence: Know which SA jockeys and trainers are in form and which partnerships fire
 - Odds reading: Interpret market moves - shortening horses show market confidence, drifters suggest trouble
-- Weight adjustment: Optimise the 5 prediction factors for the card conditions
+- Weight adjustment: Optimise all 10 prediction factors (5 AI-scored + 5 data-computed) for the card conditions
 - Scratch impact: Assess how a scratch affects the remaining field and revise selections
 - Weekly planning: Compare today's card with the next 7 days and explain where confidence is strongest
 - Model review: Mention recent hits or misses when that changes how aggressive the advice should be
 - App control: When the user explicitly tells you to sync or analyze, request the action using the control tag below
 
 ## CURRENT PREDICTION WEIGHTS
-- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% - venue suitability
-- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% - recent runs plus trip suitability
-- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% - booking strength and partnership
-- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% - market intelligence
-- History: ${(currentWeights.history * 100).toFixed(0)}% - class and historical level
+- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% — venue suitability
+- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% — recent runs plus trip suitability
+- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% — booking strength and partnership
+- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% — market intelligence
+- History: ${(currentWeights.history * 100).toFixed(0)}% — class and historical level
+- Field Strength: ${((currentWeights.fieldStrength ?? 0.10) * 100).toFixed(0)}% — relative quality of the opposition
+- Weight Carried: ${((currentWeights.weightCarried ?? 0.05) * 100).toFixed(0)}% — weight advantage/penalty vs rivals
+- Surface Fit: ${((currentWeights.surfaceFit ?? 0.03) * 100).toFixed(0)}% — turf/all-weather preference match
+- Pace Profile: ${((currentWeights.paceProfile ?? 0.02) * 100).toFixed(0)}% — racing style vs distance suitability
+- Price Value: ${((currentWeights.priceValue ?? 0.01) * 100).toFixed(0)}% — value edge vs market implied probability
 
 ## FORECAST CONTEXT
 ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on the Dashboard."}
@@ -552,8 +569,10 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - Use SA racing terminology: "the favourite", "each-way", "trifecta", "the rail", "outside draw"
 
 ## WEIGHT ADJUSTMENT
-When you recommend changing weights, append this block (and ONLY when actually changing them):
-<weights>{"courseForm": 0.30, "formDistance": 0.25, "jockeyTrainer": 0.20, "oddsMovement": 0.15, "history": 0.10}</weights>
+When you recommend changing weights, append this block (and ONLY when actually changing them).
+The 5 original factors (courseForm, formDistance, jockeyTrainer, oddsMovement, history) are AI-scored.
+The 5 new factors (fieldStrength, weightCarried, surfaceFit, paceProfile, priceValue) are data-computed.
+<weights>{"courseForm": 0.20, "formDistance": 0.20, "jockeyTrainer": 0.15, "oddsMovement": 0.12, "history": 0.12, "fieldStrength": 0.10, "weightCarried": 0.05, "surfaceFit": 0.03, "paceProfile": 0.02, "priceValue": 0.01}</weights>
 Weights must sum to exactly 1.0.
 
 ## APP ACTION TAGS

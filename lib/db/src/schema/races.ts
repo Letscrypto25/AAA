@@ -8,6 +8,13 @@ export type PredictionFactorBreakdown = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  // ── NEW FACTORS ──────────────────────────────────────────────
+  fieldStrength: number;      // How weak/strong the rest of the field is
+  weightCarried: number;      // Penalty weight vs rivals — lighter = edge
+  surfaceFit: number;         // Horse's historical turf vs all-weather record
+  paceProfile: number;        // Early speed vs late-run profile fit for distance
+  priceValue: number;         // Value relative to predicted probability vs market odds
+  // ─────────────────────────────────────────────────────────────
   overall: number;
 };
 
@@ -17,6 +24,12 @@ export type PredictionWeightConfig = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  // ── NEW ──
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 };
 
 export type LearningFactorAdjustments = {
@@ -25,6 +38,12 @@ export type LearningFactorAdjustments = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  // ── NEW ──
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 };
 
 export type LearningSummarySnapshot = {
@@ -133,11 +152,18 @@ export const forecastEntriesTable = pgTable("forecast_entries", {
 
 export const predictionWeightsTable = pgTable("prediction_weights", {
   id: serial("id").primaryKey(),
-  courseForm: real("course_form").notNull().default(0.25),
-  formDistance: real("form_distance").notNull().default(0.25),
-  jockeyTrainer: real("jockey_trainer").notNull().default(0.20),
-  oddsMovement: real("odds_movement").notNull().default(0.15),
-  history: real("history").notNull().default(0.15),
+  courseForm: real("course_form").notNull().default(0.20),
+  formDistance: real("form_distance").notNull().default(0.20),
+  jockeyTrainer: real("jockey_trainer").notNull().default(0.15),
+  oddsMovement: real("odds_movement").notNull().default(0.12),
+  history: real("history").notNull().default(0.12),
+  // ── NEW FACTORS ──────────────────────────────────────────────
+  fieldStrength: real("field_strength").notNull().default(0.10),
+  weightCarried: real("weight_carried").notNull().default(0.05),
+  surfaceFit: real("surface_fit").notNull().default(0.03),
+  paceProfile: real("pace_profile").notNull().default(0.02),
+  priceValue: real("price_value").notNull().default(0.01),
+  // ─────────────────────────────────────────────────────────────
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
@@ -166,6 +192,11 @@ export const learningFeedbackTable = pgTable("learning_feedback", {
     jockeyTrainer: 0,
     oddsMovement: 0,
     history: 0,
+    fieldStrength: 0,
+    weightCarried: 0,
+    surfaceFit: 0,
+    paceProfile: 0,
+    priceValue: 0,
   }),
   lastResultRaceId: integer("last_result_race_id").references(() => racesTable.id, { onDelete: "set null" }),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
