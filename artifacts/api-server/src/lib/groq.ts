@@ -327,6 +327,10 @@ export interface ChatWeightSuggestion {
   history?: number;
 }
 
+export type ChatActionSuggestion =
+  | { type: "sync" }
+  | { type: "analyze"; scope: "focus" | "today" };
+
 const WEIGHT_KEYS = ["courseForm", "formDistance", "jockeyTrainer", "oddsMovement", "history"] as const;
 const WEIGHT_LABELS: Array<{ key: keyof WeightConfig; patterns: RegExp[] }> = [
   { key: "courseForm", patterns: [/course\s*form/i, /course/i] },
@@ -336,16 +340,27 @@ const WEIGHT_LABELS: Array<{ key: keyof WeightConfig; patterns: RegExp[] }> = [
   { key: "history", patterns: [/history/i, /historical/i, /class/i] },
 ];
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 function normalizeWeights(weights: WeightConfig): WeightConfig {
-  const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
+  const sanitized = {
+    courseForm: clamp(Number(weights.courseForm) || 0, 0.01, 0.8),
+    formDistance: clamp(Number(weights.formDistance) || 0, 0.01, 0.8),
+    jockeyTrainer: clamp(Number(weights.jockeyTrainer) || 0, 0.01, 0.8),
+    oddsMovement: clamp(Number(weights.oddsMovement) || 0, 0.01, 0.8),
+    history: clamp(Number(weights.history) || 0, 0.01, 0.8),
+  };
+  const total = Object.values(sanitized).reduce((sum, value) => sum + value, 0);
   if (!Number.isFinite(total) || total <= 0) return weights;
 
   return {
-    courseForm: weights.courseForm / total,
-    formDistance: weights.formDistance / total,
-    jockeyTrainer: weights.jockeyTrainer / total,
-    oddsMovement: weights.oddsMovement / total,
-    history: weights.history / total,
+    courseForm: sanitized.courseForm / total,
+    formDistance: sanitized.formDistance / total,
+    jockeyTrainer: sanitized.jockeyTrainer / total,
+    oddsMovement: sanitized.oddsMovement / total,
+    history: sanitized.history / total,
   };
 }
 
@@ -409,12 +424,81 @@ function tryParseWeightSuggestions(message: string, currentWeights: WeightConfig
   return undefined;
 }
 
+function dedupeActionSuggestions(actions: ChatActionSuggestion[]): ChatActionSuggestion[] {
+  const seen = new Set<string>();
+  return actions.filter((action) => {
+    const key = `${action.type}:${"scope" in action ? action.scope : "none"}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function tryParseActionSuggestions(message: string, hasFocusRace: boolean): ChatActionSuggestion[] {
+  const text = message.trim().toLowerCase();
+  if (!text) return [];
+
+  const suggestions: ChatActionSuggestion[] = [];
+
+  if (/\b(sync|refresh)\b/.test(text) && /\b(card|board|feed|races?|meetings?|today|now)\b/.test(text)) {
+    suggestions.push({ type: "sync" });
+  }
+
+  if (/\b(analy[sz]e|run|refresh)\b/.test(text) && /\b(today|live|card|board|all races|all live)\b/.test(text)) {
+    suggestions.push({ type: "analyze", scope: "today" });
+  } else if (hasFocusRace && /\b(analy[sz]e|run|refresh)\b/.test(text) && /\b(this race|focused race|focus|selected race)\b/.test(text)) {
+    suggestions.push({ type: "analyze", scope: "focus" });
+  } else if (hasFocusRace && /\b(analy[sz]e|run forecast|refresh forecast)\b/.test(text)) {
+    suggestions.push({ type: "analyze", scope: "focus" });
+  }
+
+  return dedupeActionSuggestions(suggestions);
+}
+
+function parseActionBlock(raw: string): ChatActionSuggestion | null {
+  try {
+    const parsed = JSON.parse(raw) as { type?: string; scope?: string };
+    if (parsed.type === "sync") return { type: "sync" };
+    if (parsed.type === "analyze" && (parsed.scope === "focus" || parsed.scope === "today")) {
+      return { type: "analyze", scope: parsed.scope };
+    }
+  } catch {
+    logger.warn("Failed to parse action suggestion from AI");
+  }
+  return null;
+}
+
+function extractActionSuggestions(content: string): ChatActionSuggestion[] {
+  const matches = [...content.matchAll(/<action>([\s\S]*?)<\/action>/g)];
+  return dedupeActionSuggestions(
+    matches
+      .map((match) => parseActionBlock(match[1]))
+      .filter((action): action is ChatActionSuggestion => Boolean(action)),
+  );
+}
+
+export function inferChatControlsFromMessage(
+  message: string,
+  currentWeights: WeightConfig,
+  hasFocusRace: boolean,
+): {
+  weightSuggestions?: ChatWeightSuggestion;
+  actionSuggestions: ChatActionSuggestion[];
+} {
+  return {
+    weightSuggestions: tryParseWeightSuggestions(message, currentWeights),
+    actionSuggestions: tryParseActionSuggestions(message, hasFocusRace),
+  };
+}
+
 export async function chatWithAI(
   message: string,
   currentWeights: WeightConfig,
   chatHistory: Array<{ role: "user" | "assistant"; content: string }>,
   raceDayBriefing?: string,
-): Promise<{ reply: string; weightSuggestions?: ChatWeightSuggestion }> {
+  hasFocusRace: boolean = false,
+): Promise<{ reply: string; weightSuggestions?: ChatWeightSuggestion; actionSuggestions: ChatActionSuggestion[] }> {
+  const inferredControls = inferChatControlsFromMessage(message, currentWeights, hasFocusRace);
   const systemPrompt = `You are AAA Bets - an expert South African horse racing analyst and AI betting advisor. You have full visibility of today's card, the coming week, recent graded results, live odds movement, and the model's current hit rate.
 
 The live FORECAST CONTEXT below is the source of truth. If older chat history conflicts with it, trust the live FORECAST CONTEXT and say so plainly.
@@ -428,6 +512,7 @@ The live FORECAST CONTEXT below is the source of truth. If older chat history co
 - Scratch impact: Assess how a scratch affects the remaining field and revise selections
 - Weekly planning: Compare today's card with the next 7 days and explain where confidence is strongest
 - Model review: Mention recent hits or misses when that changes how aggressive the advice should be
+- App control: When the user explicitly tells you to sync or analyze, request the action using the control tag below
 
 ## CURRENT PREDICTION WEIGHTS
 - Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% - venue suitability
@@ -447,13 +532,21 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - When the user asks what is going on, summarise the current live races, standout horse, model edge, and recent result lessons from the FORECAST CONTEXT
 - If the user asks to set, change, increase, decrease, or rebalance weights, either confirm the new mix or recommend one, and include the weights tag
 - When suggesting weight changes, include the weights tag
+- Never claim a sync or forecast refresh has already happened unless the app confirms it afterwards
+- If the user explicitly asks you to run a sync or forecast refresh, keep the prose brief and append the control tag
 - Keep responses focused - do not pad
 - Use SA racing terminology: "the favourite", "each-way", "trifecta", "the rail", "outside draw"
 
 ## WEIGHT ADJUSTMENT
 When you recommend changing weights, append this block (and ONLY when actually changing them):
 <weights>{"courseForm": 0.30, "formDistance": 0.25, "jockeyTrainer": 0.20, "oddsMovement": 0.15, "history": 0.10}</weights>
-Weights must sum to exactly 1.0.`;
+Weights must sum to exactly 1.0.
+
+## APP ACTION TAGS
+Use these only when the user clearly asked for the action:
+<action>{"type":"sync"}</action>
+<action>{"type":"analyze","scope":"focus"}</action>
+<action>{"type":"analyze","scope":"today"}</action>`;
 
   const messages = [
     ...chatHistory.slice(-8).map((entry) => ({ role: entry.role, content: entry.content })),
@@ -463,13 +556,17 @@ Weights must sum to exactly 1.0.`;
   const response = await getGroqClient().chat.completions.create({
     model: MODEL,
     messages: [{ role: "system", content: systemPrompt }, ...messages],
-    temperature: 0.7,
+    temperature: 0.5,
     max_tokens: 1024,
   });
 
   const content = response.choices[0]?.message?.content ?? "I couldn't process that request.";
   const weightsMatch = content.match(/<weights>([\s\S]*?)<\/weights>/);
-  const reply = content.replace(/<weights>[\s\S]*?<\/weights>/g, "").trim();
+  const actionSuggestions = extractActionSuggestions(content);
+  const reply = content
+    .replace(/<weights>[\s\S]*?<\/weights>/g, "")
+    .replace(/<action>[\s\S]*?<\/action>/g, "")
+    .trim();
   let weightSuggestions: ChatWeightSuggestion | undefined;
 
   if (weightsMatch) {
@@ -481,8 +578,12 @@ Weights must sum to exactly 1.0.`;
   }
 
   if (!weightSuggestions) {
-    weightSuggestions = tryParseWeightSuggestions(message, currentWeights);
+    weightSuggestions = inferredControls.weightSuggestions;
   }
 
-  return { reply, weightSuggestions };
+  return {
+    reply,
+    weightSuggestions,
+    actionSuggestions: actionSuggestions.length > 0 ? actionSuggestions : inferredControls.actionSuggestions,
+  };
 }

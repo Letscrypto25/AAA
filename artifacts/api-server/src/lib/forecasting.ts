@@ -53,6 +53,10 @@ function round(value: number, digits: number = 4): number {
   return Math.round(value * factor) / factor;
 }
 
+function learningScale(sampleSize: number, saturation: number = 36): number {
+  return clamp(sampleSize / saturation, 0, 1);
+}
+
 function normalizeWeights(weights: PredictionWeightConfig): PredictionWeightConfig {
   const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
   if (total <= 0) return { ...DEFAULT_WEIGHTS };
@@ -114,13 +118,15 @@ async function ensureLearningFeedback(): Promise<typeof learningFeedbackTable.$i
 function buildAdaptiveWeights(
   baseWeights: PredictionWeightConfig,
   factorAdjustments: LearningFactorAdjustments,
+  sampleSize: number,
 ): PredictionWeightConfig {
+  const adjustmentStrength = 0.08 + learningScale(sampleSize, 28) * 0.1;
   const adjusted: PredictionWeightConfig = {
-    courseForm: baseWeights.courseForm + factorAdjustments.courseForm * 0.18,
-    formDistance: baseWeights.formDistance + factorAdjustments.formDistance * 0.18,
-    jockeyTrainer: baseWeights.jockeyTrainer + factorAdjustments.jockeyTrainer * 0.18,
-    oddsMovement: baseWeights.oddsMovement + factorAdjustments.oddsMovement * 0.18,
-    history: baseWeights.history + factorAdjustments.history * 0.18,
+    courseForm: baseWeights.courseForm + factorAdjustments.courseForm * adjustmentStrength,
+    formDistance: baseWeights.formDistance + factorAdjustments.formDistance * adjustmentStrength,
+    jockeyTrainer: baseWeights.jockeyTrainer + factorAdjustments.jockeyTrainer * adjustmentStrength,
+    oddsMovement: baseWeights.oddsMovement + factorAdjustments.oddsMovement * adjustmentStrength,
+    history: baseWeights.history + factorAdjustments.history * adjustmentStrength,
   };
 
   return normalizeWeightSum({
@@ -130,6 +136,95 @@ function buildAdaptiveWeights(
     oddsMovement: clamp(adjusted.oddsMovement, 0.05, 0.4),
     history: clamp(adjusted.history, 0.05, 0.4),
   });
+}
+
+function parseFormScore(form: string): number {
+  const values = form
+    .split("-")
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  if (values.length === 0) return 0.46;
+
+  const weightedTotal = values.reduce((sum, value, index) => {
+    const recencyWeight = values.length - index;
+    const placingScore = Math.max(0, 6 - value) / 5;
+    return sum + placingScore * recencyWeight;
+  }, 0);
+  const totalWeight = values.reduce((sum, _value, index) => sum + (values.length - index), 0);
+
+  return clamp(weightedTotal / Math.max(totalWeight, 1), 0.16, 0.96);
+}
+
+function parseTrainerJockeyScore(record: string): number {
+  if (!record.trim()) return 0.55;
+
+  const winsFromStarts = record.match(/(\d+)\s+wins?\s+from\s+(\d+)/i);
+  if (winsFromStarts) {
+    const wins = Number(winsFromStarts[1]);
+    const starts = Number(winsFromStarts[2]);
+    if (Number.isFinite(wins) && Number.isFinite(starts) && starts > 0) {
+      return clamp(0.44 + (wins / starts) * 0.5, 0.3, 0.9);
+    }
+  }
+
+  const percentageMatch = record.match(/(\d{1,3})\s*%/);
+  if (percentageMatch) {
+    const percentage = Number(percentageMatch[1]);
+    if (Number.isFinite(percentage)) {
+      return clamp(0.4 + percentage / 200, 0.3, 0.88);
+    }
+  }
+
+  return 0.61;
+}
+
+function buildMarketScores(
+  horse: typeof horsesTable.$inferSelect,
+  maxOdds: number,
+): { marketStrength: number; movementStrength: number } {
+  const impliedStrength = clamp(1 - (horse.currentOdds - 1.2) / Math.max(maxOdds, 1.2), 0.12, 0.94);
+  const openingOdds = horse.openingOdds ?? horse.currentOdds;
+  const moveRatio = openingOdds > 0 ? (openingOdds - horse.currentOdds) / openingOdds : 0;
+  const movementStrength =
+    horse.oddsMovement === "shortening"
+      ? clamp(0.62 + moveRatio * 0.7, 0.54, 0.9)
+      : horse.oddsMovement === "drifting"
+        ? clamp(0.44 + moveRatio * 0.35, 0.18, 0.48)
+        : clamp(0.52 + moveRatio * 0.4, 0.34, 0.74);
+
+  return {
+    marketStrength: impliedStrength,
+    movementStrength,
+  };
+}
+
+function sanitizeFactorBreakdown(
+  factors: Partial<PredictionFactorBreakdown> | undefined,
+  fallbackScore: number,
+): PredictionFactorBreakdown {
+  return {
+    courseForm: clamp(Number(factors?.courseForm ?? fallbackScore), 0, 1),
+    formDistance: clamp(Number(factors?.formDistance ?? fallbackScore), 0, 1),
+    jockeyTrainer: clamp(Number(factors?.jockeyTrainer ?? fallbackScore), 0, 1),
+    oddsMovement: clamp(Number(factors?.oddsMovement ?? fallbackScore), 0, 1),
+    history: clamp(Number(factors?.history ?? fallbackScore), 0, 1),
+    overall: clamp(Number(factors?.overall ?? fallbackScore), 0, 1),
+  };
+}
+
+function getFactorProfile(factors: PredictionFactorBreakdown): {
+  average: number;
+  consistency: number;
+} {
+  const values = FACTOR_KEYS.map((key) => factors[key] ?? 0.5);
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const spread = Math.max(...values) - Math.min(...values);
+
+  return {
+    average,
+    consistency: clamp(1 - spread * 0.85, 0.2, 1),
+  };
 }
 
 function buildFallbackPredictions(
@@ -142,50 +237,49 @@ function buildFallbackPredictions(
   const maxOdds = Math.max(...activeHorses.map(({ horse }) => horse.currentOdds), 1);
 
   return activeHorses.map(({ horse, index }) => {
-    const formValues = horse.form
-      .split("-")
-      .map((value) => Number(value))
-      .filter((value) => Number.isFinite(value) && value >= 0);
-    const formScore = formValues.length > 0
-      ? clamp(
-          formValues.reduce((sum, value) => sum + Math.max(0, 6 - value), 0) / (formValues.length * 5),
-          0,
-          1,
-        )
-      : 0.45;
-    const courseScore = horse.courseRecord ? 0.85 : 0.45;
-    const distanceScore = horse.distanceRecord ? 0.82 : formScore;
-    const jockeyTrainerScore = horse.trainerJockeyRecord ? 0.68 : 0.52;
-    const oddsMovementScore =
-      horse.oddsMovement === "shortening"
-        ? 0.8
-        : horse.oddsMovement === "drifting"
-          ? 0.38
-          : 0.56;
-    const historyScore = clamp(1 - horse.currentOdds / (maxOdds + 2), 0.18, 0.86);
+    const formScore = parseFormScore(horse.form);
+    const courseScore = horse.courseRecord ? clamp(0.72 + formScore * 0.2, 0.4, 0.94) : clamp(0.4 + formScore * 0.12, 0.25, 0.72);
+    const distanceScore = horse.distanceRecord ? clamp(0.7 + formScore * 0.22, 0.42, 0.94) : clamp(0.38 + formScore * 0.24, 0.24, 0.78);
+    const jockeyTrainerScore = parseTrainerJockeyScore(horse.trainerJockeyRecord);
+    const marketScores = buildMarketScores(horse, maxOdds);
+    const historyScore = clamp(
+      formScore * 0.42 + marketScores.marketStrength * 0.38 + (horse.distanceRecord ? 0.12 : 0) + (horse.courseRecord ? 0.08 : 0),
+      0.18,
+      0.9,
+    );
+    const factorBlend = {
+      courseForm: round(courseScore),
+      formDistance: round(Math.max(formScore, distanceScore)),
+      jockeyTrainer: round(jockeyTrainerScore),
+      oddsMovement: round(marketScores.movementStrength),
+      history: round(historyScore),
+    };
     const overall = clamp(
-      courseScore * weights.courseForm +
-        Math.max(formScore, distanceScore) * weights.formDistance +
-        jockeyTrainerScore * weights.jockeyTrainer +
-        oddsMovementScore * weights.oddsMovement +
-        historyScore * weights.history,
+      factorBlend.courseForm * weights.courseForm +
+        factorBlend.formDistance * weights.formDistance +
+        factorBlend.jockeyTrainer * weights.jockeyTrainer +
+        factorBlend.oddsMovement * weights.oddsMovement +
+        factorBlend.history * weights.history,
       0.08,
       0.99,
     );
+    const dataCoverage =
+      (horse.courseRecord ? 1 : 0)
+      + (horse.distanceRecord ? 1 : 0)
+      + (horse.trainerJockeyRecord.trim() ? 1 : 0)
+      + (horse.form.trim() ? 1 : 0)
+      + (horse.openingOdds != null ? 1 : 0);
+    const coverageScore = dataCoverage / 5;
 
     return {
       horseIndex: index,
       score: round(overall),
-      confidence: round(clamp(overall * 0.78 + 0.12, 0.28, 0.82)),
+      confidence: round(clamp(0.2 + overall * 0.34 + coverageScore * 0.14 + marketScores.marketStrength * 0.1, 0.22, 0.72)),
       factors: {
-        courseForm: round(courseScore),
-        formDistance: round(Math.max(formScore, distanceScore)),
-        jockeyTrainer: round(jockeyTrainerScore),
-        oddsMovement: round(oddsMovementScore),
-        history: round(historyScore),
+        ...factorBlend,
         overall: round(overall),
       },
-      aiSummary: "Fallback scoring blended form, market movement, and course suitability.",
+      aiSummary: "Fallback scoring blended recency-weighted form, market shape, and venue-distance fit.",
     };
   });
 }
@@ -215,16 +309,61 @@ function decoratePredictions(
 }> {
   const timeProfile = getRaceTimeProfile(raceTime, meetingDate);
   const timeToRaceMinutes = getMinutesToRace(raceTime, meetingDate);
+  const sampleScale = learningScale(learningSnapshot.sampleSize, 40);
+  const sortedRaw = [...rawPredictions].sort((left, right) => clamp(right.score, 0, 1) - clamp(left.score, 0, 1));
+  const topScore = clamp(sortedRaw[0]?.score ?? 0.5, 0, 1);
+  const secondScore = clamp(sortedRaw[1]?.score ?? topScore - 0.03, 0, 1);
+  const bottomScore = clamp(sortedRaw[sortedRaw.length - 1]?.score ?? 0.1, 0, 1);
+  const fieldSizePenalty = clamp((sortedRaw.length - 6) * 0.022, 0, 0.18);
+  const scoreRange = clamp(topScore - bottomScore, 0.04, 0.42);
+  const timeAdjustment = 1 + (timeProfile.confidenceFactor - 1) * 0.45;
+  const biasWeight = 0.1 + sampleScale * 0.1;
+  const factorWeight = 0.08 + sampleScale * 0.04;
+  const scoreWeight = 0.08 + sampleScale * 0.08;
 
   return rawPredictions.map((prediction) => {
-    const factors = prediction.factors as PredictionFactorBreakdown;
+    const rankIndex = sortedRaw.findIndex((candidate) => candidate.horseIndex === prediction.horseIndex);
+    const nextScore = clamp(sortedRaw[rankIndex + 1]?.score ?? prediction.score - 0.02, 0, 1);
+    const factors = sanitizeFactorBreakdown(prediction.factors as PredictionFactorBreakdown, prediction.score);
     const factorSignal = getFactorSignal(factors, learningSnapshot.factorAdjustments);
-    const adjustedScore = clamp(prediction.score + factorSignal * 0.16, 0.04, 0.99);
-    const baseConfidence = clamp(prediction.confidence, 0.05, 0.99);
+    const factorProfile = getFactorProfile(factors);
+    const gapToNext = clamp(prediction.score - nextScore, 0, 0.25);
+    const gapFromTop = clamp(topScore - prediction.score, 0, 0.35);
+    const adjustedScore = clamp(prediction.score + factorSignal * scoreWeight, 0.04, 0.99);
+    const rawConfidence = clamp(prediction.confidence, 0.12, 0.88);
+    const structuralConfidence = clamp(
+      0.18
+        + prediction.score * 0.24
+        + factorProfile.average * 0.18
+        + factorProfile.consistency * 0.08
+        + gapToNext * 0.62
+        + scoreRange * 0.18
+        - fieldSizePenalty
+        - rankIndex * 0.042
+        - gapFromTop * 0.14,
+      0.12,
+      0.8,
+    );
+    const baseConfidence = clamp(rawConfidence * 0.35 + structuralConfidence * 0.65, 0.12, 0.8);
+    const conservativeCap = clamp(
+      0.62
+        + gapToNext * 0.38
+        + scoreRange * 0.18
+        + factorProfile.consistency * 0.05
+        + sampleScale * 0.05
+        - Math.max(0, -learningSnapshot.confidenceBias) * 0.16
+        - fieldSizePenalty * 0.5
+        - rankIndex * 0.03,
+      0.52,
+      0.86,
+    );
     const adjustedConfidence = clamp(
-      baseConfidence * timeProfile.confidenceFactor + learningSnapshot.confidenceBias * 0.25 + factorSignal * 0.18,
-      0.06,
-      0.99,
+      Math.min(
+        baseConfidence * timeAdjustment + learningSnapshot.confidenceBias * biasWeight + factorSignal * factorWeight,
+        conservativeCap,
+      ),
+      0.12,
+      conservativeCap,
     );
 
     return {
@@ -280,6 +419,7 @@ export async function runRaceForecast(
       history: baseWeights.history,
     },
     learningSnapshot.factorAdjustments,
+    learningSnapshot.sampleSize,
   );
 
   let rawPredictions: HorsePrediction[];

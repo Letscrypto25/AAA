@@ -13,7 +13,13 @@ import {
 } from "@workspace/api-zod";
 import { getNextUpdateTime } from "../lib/scheduler";
 import { runRaceForecast, recordRaceResult } from "../lib/forecasting";
-import { buildRaceForecastCards } from "../lib/race-insights";
+import {
+  buildRaceForecastCards,
+  isRaceHistoryCard,
+  isRaceLiveCard,
+  sortRaceCardsByHistoryPriority,
+  sortRaceCardsByLivePriority,
+} from "../lib/race-insights";
 
 const router = Router();
 
@@ -50,7 +56,11 @@ router.get("/races", async (req, res): Promise<void> => {
   }
 
   const cards = await buildRaceForecastCards(rows);
-  res.json(cards);
+  const orderedCards = [
+    ...sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard)),
+    ...sortRaceCardsByHistoryPriority(cards.filter(isRaceHistoryCard)),
+  ];
+  res.json(orderedCards);
 });
 
 router.post("/races", async (req, res): Promise<void> => {

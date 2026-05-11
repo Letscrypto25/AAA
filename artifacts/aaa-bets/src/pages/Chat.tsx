@@ -6,6 +6,12 @@ import { Bot, CalendarDays, Clock3, MessageSquare, Send, Settings2, ShieldCheck,
 import { cn } from "@/lib/utils";
 import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
 import { Link } from "wouter";
+import {
+  isHistoryRaceCard,
+  isLiveRaceCard,
+  sortHistoryRaceCards,
+  sortLiveRaceCards,
+} from "@/lib/race-board";
 
 function renderMessage(text: string) {
   const lines = text.split("\n");
@@ -44,6 +50,19 @@ type WeightsUpdate = {
   updatedAt: string;
 };
 
+type ActionResult = {
+  type: string;
+  status: "executed" | "skipped" | "failed";
+  label: string;
+  detail: string;
+};
+
+type ChatMutationResult = {
+  updatedWeights?: WeightsUpdate | null;
+  actionResults?: ActionResult[];
+  triggeredAnalysis?: boolean;
+};
+
 function formatConfidence(value?: number | null) {
   return value == null ? "Forecast pending" : `${Math.round(value * 100)}% confidence`;
 }
@@ -59,11 +78,15 @@ export default function Chat() {
   const [selectedRaceId, setSelectedRaceId] = useState<number | undefined>();
   const [optimisticMessages, setOptimisticMessages] = useState<Array<{ role: string; content: string; id: number }>>([]);
   const [lastWeightsUpdate, setLastWeightsUpdate] = useState<WeightsUpdate | null>(null);
+  const [lastActionResults, setLastActionResults] = useState<ActionResult[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const allMessages = [...(history ?? []), ...optimisticMessages];
-  const usableRaces = (races ?? []).filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
+  const usableRaces = [
+    ...sortLiveRaceCards((races ?? []).filter((race) => (race.horseCount > 0 || !!race.topPrediction || !!race.result) && isLiveRaceCard(race))),
+    ...sortHistoryRaceCards((races ?? []).filter((race) => (race.horseCount > 0 || !!race.topPrediction || !!race.result) && isHistoryRaceCard(race))),
+  ];
   const summaryTodayCards = (summary?.todayCards ?? []).filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
   const todayRaces = summaryTodayCards.length > 0
     ? summaryTodayCards
@@ -103,9 +126,16 @@ export default function Chat() {
     try {
       const result = await sendMessage.mutateAsync({
         data: { message: msg, raceId: selectedRaceId },
-      });
-      if ((result as { updatedWeights?: WeightsUpdate }).updatedWeights) {
-        setLastWeightsUpdate((result as { updatedWeights: WeightsUpdate }).updatedWeights);
+      }) as ChatMutationResult;
+      if (result.updatedWeights) {
+        setLastWeightsUpdate(result.updatedWeights);
+        await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+        await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
+      }
+      if (result.actionResults?.length) {
+        setLastActionResults(result.actionResults);
+      }
+      if (result.updatedWeights || result.actionResults?.some((action) => action.status === "executed")) {
         await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
         await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
       }
@@ -132,10 +162,13 @@ export default function Chat() {
         recentModelResult ? `What did the latest ${recentModelResult.topPickCorrect ? "hit" : "miss"} teach the model?` : null,
         `Which jockey has the best book today?`,
         `Which races are worth betting on?`,
+        `Analyze today's live races now`,
+        `Sync the live card now`,
         `Increase weight on odds movement`,
         `Set weights to 30% course form, 25% form and distance, 20% jockey and trainer, 15% odds movement, 10% history`,
       ].filter((value): value is string => Boolean(value))
     : [
+        "Sync the live card now",
         "Give more weight to odds movement",
         "Which horse has the best trainer/jockey combo?",
         "Explain the current prediction weights",
@@ -176,6 +209,32 @@ export default function Chat() {
             <strong>Weights updated:</strong> Course Form {(lastWeightsUpdate.courseForm * 100).toFixed(0)}% · Form/Dist {(lastWeightsUpdate.formDistance * 100).toFixed(0)}% · Jockey/Trainer {(lastWeightsUpdate.jockeyTrainer * 100).toFixed(0)}% · Odds {(lastWeightsUpdate.oddsMovement * 100).toFixed(0)}% · History {(lastWeightsUpdate.history * 100).toFixed(0)}%
           </p>
           <button onClick={() => setLastWeightsUpdate(null)} className="text-muted-foreground hover:text-foreground text-base leading-none">&times;</button>
+        </div>
+      )}
+
+      {lastActionResults.length > 0 && (
+        <div className="mx-6 mt-3 rounded-lg border border-card-border bg-card px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">App actions</p>
+              {lastActionResults.map((action, index) => (
+                <p
+                  key={`${action.type}-${index}`}
+                  className={cn(
+                    "text-xs",
+                    action.status === "executed"
+                      ? "text-emerald-300"
+                      : action.status === "failed"
+                        ? "text-rose-300"
+                        : "text-muted-foreground",
+                  )}
+                >
+                  <strong>{action.label}:</strong> {action.detail}
+                </p>
+              ))}
+            </div>
+            <button onClick={() => setLastActionResults([])} className="text-muted-foreground hover:text-foreground text-base leading-none">&times;</button>
+          </div>
         </div>
       )}
 
@@ -272,7 +331,7 @@ export default function Chat() {
             <div>
               <p className="font-semibold text-foreground text-lg">AAA Bets AI Analyst</p>
               <p className="text-base text-muted-foreground mt-1 max-w-2xl mx-auto leading-7">
-                I have the live race card, runners, odds, recent model results, and current weights in view. Ask for the best bet, a race breakdown, or tell me exactly how you want the weights set.
+                I can read the live card, race history, current weights, recent model form, and the app's control surface. Ask for the best bet, run a sync, refresh forecasts, or tell me exactly how you want the weights set.
               </p>
             </div>
             {todayRaces.length > 0 && (
@@ -386,10 +445,10 @@ export default function Chat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={focusRace
-              ? `Ask about ${focusRace.name}, ${focusRace.topPrediction?.horseName ?? "the field"}, or the best play...`
+              ? `Ask about ${focusRace.name}, run a forecast refresh, or compare the field...`
               : todayRaces.length > 0
-                ? `Ask about today's ${todayRaces.length} races, best bets, weights...`
-                : "Ask about predictions, weights, race strategy..."}
+                ? `Ask about today's ${todayRaces.length} live races, sync, forecasts, or weights...`
+                : "Ask about predictions, results history, sync, or weights..."}
             rows={1}
             className="flex-1 bg-transparent text-[15px] leading-6 text-foreground resize-none focus:outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
             style={{ height: "auto" }}

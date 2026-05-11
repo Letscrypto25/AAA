@@ -7,12 +7,46 @@ import {
   horsesTable,
   predictionsTable,
 } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { SendChatMessageBody } from "@workspace/api-zod";
-import { chatWithAI } from "../lib/groq";
-import { buildRaceForecastCards, buildWeeklyOverview, getLearningPerformanceSummary } from "../lib/race-insights";
+import {
+  chatWithAI,
+  inferChatControlsFromMessage,
+  type ChatActionSuggestion,
+  type ChatWeightSuggestion,
+} from "../lib/groq";
+import { runRaceForecast } from "../lib/forecasting";
+import { getLastSyncStatus, syncTodaysMeetings } from "../lib/raceSync";
+import {
+  buildRaceForecastCards,
+  buildWeeklyOverview,
+  getLearningPerformanceSummary,
+  isRaceHistoryCard,
+  isRaceLiveCard,
+  sortRaceCardsByHistoryPriority,
+  sortRaceCardsByLivePriority,
+} from "../lib/race-insights";
 
 const router = Router();
+
+type WeightSnapshot = {
+  courseForm: number;
+  formDistance: number;
+  jockeyTrainer: number;
+  oddsMovement: number;
+  history: number;
+};
+
+type ChatActionResult = {
+  type: "sync" | "analyze_focus" | "analyze_today";
+  status: "executed" | "skipped" | "failed";
+  label: string;
+  detail: string;
+};
+
+type PersistedWeightSnapshot = WeightSnapshot & {
+  updatedAt: string;
+};
 
 function oddsLabel(movement: string): string {
   if (movement === "shortening") return "SHORTENING";
@@ -20,10 +54,60 @@ function oddsLabel(movement: string): string {
   return "STABLE";
 }
 
-async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
+function getWeightSnapshot(weights: WeightSnapshot): WeightSnapshot {
+  return {
+    courseForm: weights.courseForm,
+    formDistance: weights.formDistance,
+    jockeyTrainer: weights.jockeyTrainer,
+    oddsMovement: weights.oddsMovement,
+    history: weights.history,
+  };
+}
+
+function normalizeWeightMix(weights: WeightSnapshot): WeightSnapshot {
+  const sanitized = {
+    courseForm: Math.max(0.01, weights.courseForm),
+    formDistance: Math.max(0.01, weights.formDistance),
+    jockeyTrainer: Math.max(0.01, weights.jockeyTrainer),
+    oddsMovement: Math.max(0.01, weights.oddsMovement),
+    history: Math.max(0.01, weights.history),
+  };
+  const total = Object.values(sanitized).reduce((sum, value) => sum + value, 0);
+
+  return {
+    courseForm: sanitized.courseForm / total,
+    formDistance: sanitized.formDistance / total,
+    jockeyTrainer: sanitized.jockeyTrainer / total,
+    oddsMovement: sanitized.oddsMovement / total,
+    history: sanitized.history / total,
+  };
+}
+
+function formatWeightLine(weights: WeightSnapshot): string {
+  return [
+    `Course Form ${(weights.courseForm * 100).toFixed(0)}%`,
+    `Form/Distance ${(weights.formDistance * 100).toFixed(0)}%`,
+    `Jockey/Trainer ${(weights.jockeyTrainer * 100).toFixed(0)}%`,
+    `Odds ${(weights.oddsMovement * 100).toFixed(0)}%`,
+    `History ${(weights.history * 100).toFixed(0)}%`,
+  ].join(" | ");
+}
+
+function buildLearningLine(adjustments: Record<string, number>): string {
+  return Object.entries(adjustments)
+    .map(([key, value]) => `${key} ${value >= 0 ? "+" : ""}${value.toFixed(2)}`)
+    .join(" | ");
+}
+
+function isSkippableAnalysisError(message: string): boolean {
+  return message === "Race already graded or closed" || message === "No horses in this race";
+}
+
+async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId?: number): Promise<string> {
   const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
   const cards = (await buildRaceForecastCards(allRaces)).filter((card) => card.horseCount > 0 || !!card.result);
   const performance = await getLearningPerformanceSummary();
+  const syncStatus = await getLastSyncStatus();
   const allHorses = await db.select().from(horsesTable);
   const allPredictions = await db.select().from(predictionsTable).orderBy(predictionsTable.rank);
 
@@ -42,25 +126,32 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
     predictionMap.set(prediction.raceId, list);
   }
 
-  const todayCards = cards.filter((card) => card.isToday).sort((left, right) => {
-    const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-    const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-    return leftMinutes - rightMinutes;
-  });
+  const liveCards = sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard));
+  const todayCards = liveCards.filter((card) => card.isToday);
+  const historyCards = sortRaceCardsByHistoryPriority(cards.filter(isRaceHistoryCard));
   const weeklyOverview = buildWeeklyOverview(cards);
-  const focusCard = focusRaceId ? cards.find((card) => card.id === focusRaceId) : todayCards[0];
+  const focusCard = focusRaceId
+    ? cards.find((card) => card.id === focusRaceId)
+    : todayCards[0] ?? liveCards[0] ?? historyCards[0];
 
   const lines: string[] = [];
   lines.push("AAA BETS FORECAST CONTEXT");
-  lines.push("SOURCE OF TRUTH: Use only this live briefing plus the current user message. Ignore stale assumptions from older chat turns if they conflict with this briefing.");
+  lines.push("SOURCE OF TRUTH: use this live briefing first and override stale earlier chat turns when they conflict.");
   lines.push(
-    `TODAY: ${todayCards.length} races loaded | WEEK: ${cards.filter((card) => card.isThisWeek).length} races across ${weeklyOverview.length} days`,
+    `APP STATE: ${liveCards.length} live races | ${todayCards.length} live today | ${historyCards.length} results/history | ${cards.filter((card) => card.isThisWeek).length} week cards`,
   );
   lines.push(
     `MODEL: ${Math.round(performance.topPickWinRate * 100)}% win | ${Math.round(performance.placedRate * 100)}% place | ${Math.round(performance.averageConfidence * 100)}% avg confidence | bias ${performance.confidenceBias >= 0 ? "+" : ""}${performance.confidenceBias.toFixed(2)}`,
   );
+  lines.push(`CURRENT WEIGHTS: ${formatWeightLine(currentWeights)}`);
+  lines.push(`ADAPTIVE SIGNALS: ${buildLearningLine(performance.factorAdjustments)}`);
   if (performance.strongestEdge) {
     lines.push(`LEARNED EDGE: ${performance.strongestEdge}`);
+  }
+  if (syncStatus) {
+    lines.push(
+      `SYNC STATUS: ${syncStatus.status} | date ${syncStatus.lastSyncDate ?? "unknown"} | meetings ${syncStatus.meetingsFound} | races ${syncStatus.racesCreated}`,
+    );
   }
   if (performance.recentResults.length > 0) {
     lines.push(
@@ -69,23 +160,29 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
         .join(" | ")}`,
     );
   }
-  lines.push("");
-  lines.push("CURRENT WEIGHTS SNAPSHOT: Course Form / Form & Distance / Jockey & Trainer / Odds Movement / History are set in-app and can be changed on request.");
+  lines.push("AVAILABLE ACTIONS: sync the live card, analyze the focused race, analyze today's live races, update weights.");
   lines.push("");
 
   if (todayCards.length === 0) {
-    lines.push("TODAY CARD: no current-day races are loaded yet.");
+    lines.push("LIVE CARD: no live today races are loaded right now.");
   } else {
-    lines.push("TODAY CARD:");
+    lines.push("LIVE CARD:");
     for (const card of todayCards.slice(0, 8)) {
       lines.push(
-        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}% ${card.topPrediction.confidenceBand}` : "forecast pending"}`,
+        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | status ${card.status} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}% ${card.topPrediction.confidenceBand}` : "forecast pending"}`,
       );
-      if (card.result) {
-        lines.push(
-          `  Result: ${card.result.winnerHorseName}${card.result.topPickCorrect === true ? " (top pick hit)" : card.result.topPickCorrect === false ? " (top pick missed)" : ""}`,
-        );
-      }
+    }
+  }
+
+  lines.push("");
+  lines.push("RESULTS AND HISTORY:");
+  if (historyCards.length === 0) {
+    lines.push("- No completed or over races are stored yet.");
+  } else {
+    for (const card of historyCards.slice(0, 6)) {
+      lines.push(
+        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.result ? `winner ${card.result.winnerHorseName}` : "result pending"}${card.result?.topPickCorrect === true ? " | top pick hit" : card.result?.topPickCorrect === false ? " | top pick missed" : ""}`,
+      );
     }
   }
 
@@ -93,7 +190,7 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
   lines.push("WEEK AHEAD:");
   for (const day of weeklyOverview.slice(0, 7)) {
     lines.push(
-      `- ${day.label}: ${day.raceCount} races at ${day.venues.join(", ")} | spotlight ${day.spotlightRaceName ?? "none"}${day.spotlightHorseName ? ` -> ${day.spotlightHorseName} ${Math.round((day.spotlightConfidence ?? 0) * 100)}%` : ""}`,
+      `- ${day.label}: ${day.raceCount} races at ${day.venues.join(", ")} | forecasted ${day.analyzedCount} | completed ${day.completedCount}${day.spotlightRaceName ? ` | spotlight ${day.spotlightRaceName}${day.spotlightHorseName ? ` -> ${day.spotlightHorseName}` : ""}${day.spotlightConfidence != null ? ` ${Math.round(day.spotlightConfidence * 100)}%` : ""}` : ""}`,
     );
   }
 
@@ -118,6 +215,133 @@ async function buildForecastBriefing(focusRaceId?: number): Promise<string> {
   }
 
   return lines.join("\n");
+}
+
+async function executeAnalyzeTodayAction(): Promise<ChatActionResult> {
+  const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
+  const cards = await buildRaceForecastCards(allRaces);
+  const candidates = sortRaceCardsByLivePriority(
+    cards.filter((card) => card.isToday && isRaceLiveCard(card) && card.horseCount > 0),
+  );
+
+  if (candidates.length === 0) {
+    return {
+      type: "analyze_today",
+      status: "skipped",
+      label: "Analyze live today",
+      detail: "No live today races were ready to analyze.",
+    };
+  }
+
+  let successCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (const card of candidates) {
+    try {
+      await runRaceForecast(card.id, "manual");
+      successCount += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Race analysis failed";
+      if (isSkippableAnalysisError(message)) skippedCount += 1;
+      else failedCount += 1;
+    }
+  }
+
+  if (successCount > 0) {
+    return {
+      type: "analyze_today",
+      status: "executed",
+      label: "Analyze live today",
+      detail: `Analyzed ${successCount} live today race(s)${skippedCount > 0 ? `, skipped ${skippedCount}` : ""}${failedCount > 0 ? `, failed ${failedCount}` : ""}.`,
+    };
+  }
+
+  return {
+    type: "analyze_today",
+    status: failedCount > 0 ? "failed" : "skipped",
+    label: "Analyze live today",
+    detail: failedCount > 0
+      ? `No today forecasts were refreshed. ${failedCount} race(s) failed.`
+      : "No today forecasts were refreshed because every race was already closed or missing runners.",
+  };
+}
+
+async function executeChatActions(actions: ChatActionSuggestion[], focusRaceId?: number | null): Promise<{
+  actionResults: ChatActionResult[];
+  triggeredAnalysis: boolean;
+}> {
+  const orderedActions = [...actions].sort((left, right) => {
+    if (left.type === right.type) return 0;
+    return left.type === "sync" ? -1 : 1;
+  });
+
+  const actionResults: ChatActionResult[] = [];
+
+  for (const action of orderedActions) {
+    if (action.type === "sync") {
+      try {
+        await syncTodaysMeetings();
+        const status = await getLastSyncStatus();
+        actionResults.push({
+          type: "sync",
+          status: "executed",
+          label: "Sync live card",
+          detail: status
+            ? `Sync completed for ${status.lastSyncDate ?? "today"} with ${status.meetingsFound} meeting(s) and ${status.racesCreated} new race(s).`
+            : "Sync completed.",
+        });
+      } catch {
+        actionResults.push({
+          type: "sync",
+          status: "failed",
+          label: "Sync live card",
+          detail: "Sync failed.",
+        });
+      }
+      continue;
+    }
+
+    if (action.scope === "focus") {
+      if (!focusRaceId) {
+        actionResults.push({
+          type: "analyze_focus",
+          status: "skipped",
+          label: "Analyze focused race",
+          detail: "No focused race was selected.",
+        });
+        continue;
+      }
+
+      try {
+        await runRaceForecast(focusRaceId, "manual");
+        actionResults.push({
+          type: "analyze_focus",
+          status: "executed",
+          label: "Analyze focused race",
+          detail: `Forecast refreshed for race ${focusRaceId}.`,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Race analysis failed";
+        actionResults.push({
+          type: "analyze_focus",
+          status: isSkippableAnalysisError(message) ? "skipped" : "failed",
+          label: "Analyze focused race",
+          detail: isSkippableAnalysisError(message)
+            ? `Focused race was not refreshed: ${message}.`
+            : `Focused race analysis failed: ${message}.`,
+        });
+      }
+      continue;
+    }
+
+    actionResults.push(await executeAnalyzeTodayAction());
+  }
+
+  return {
+    actionResults,
+    triggeredAnalysis: actionResults.some((result) => result.status === "executed" && result.type !== "sync"),
+  };
 }
 
 router.get("/chat/history", async (_req, res): Promise<void> => {
@@ -152,6 +376,7 @@ router.post("/chat", async (req, res): Promise<void> => {
       .returning();
   }
 
+  const currentWeights = getWeightSnapshot(weights);
   const recentHistory = await db
     .select()
     .from(chatMessagesTable)
@@ -163,7 +388,7 @@ router.post("/chat", async (req, res): Promise<void> => {
     content: chatMessage.content,
   }));
 
-  const raceDayBriefing = await buildForecastBriefing(raceId ?? undefined);
+  const raceDayBriefing = await buildForecastBriefing(currentWeights, raceId ?? undefined);
 
   await db.insert(chatMessagesTable).values({
     role: "user",
@@ -171,46 +396,66 @@ router.post("/chat", async (req, res): Promise<void> => {
     raceId: raceId ?? null,
   });
 
-  let aiResult;
+  let aiResult: {
+    reply: string;
+    weightSuggestions?: ChatWeightSuggestion;
+    actionSuggestions: ChatActionSuggestion[];
+  };
+
   try {
-    aiResult = await chatWithAI(message, weights, history, raceDayBriefing);
-  } catch (_err) {
+    aiResult = await chatWithAI(message, currentWeights, history, raceDayBriefing, Boolean(raceId));
+  } catch {
+    const inferred = inferChatControlsFromMessage(message, currentWeights, Boolean(raceId));
     aiResult = {
-      reply: "I'm unable to connect to the AI right now. Please check your GROQ_API_KEY and try again.",
-      weightSuggestions: undefined,
+      reply: inferred.actionSuggestions.length > 0 || inferred.weightSuggestions
+        ? "The AI connection is unavailable, but I can still run the requested in-app control."
+        : "I'm unable to connect to the AI right now. Please check your GROQ_API_KEY and try again.",
+      weightSuggestions: inferred.weightSuggestions,
+      actionSuggestions: inferred.actionSuggestions,
     };
   }
+
+  let updatedWeights: PersistedWeightSnapshot | null = null;
+  if (aiResult.weightSuggestions) {
+    const nextWeights = normalizeWeightMix({
+      courseForm: aiResult.weightSuggestions.courseForm ?? currentWeights.courseForm,
+      formDistance: aiResult.weightSuggestions.formDistance ?? currentWeights.formDistance,
+      jockeyTrainer: aiResult.weightSuggestions.jockeyTrainer ?? currentWeights.jockeyTrainer,
+      oddsMovement: aiResult.weightSuggestions.oddsMovement ?? currentWeights.oddsMovement,
+      history: aiResult.weightSuggestions.history ?? currentWeights.history,
+    });
+    const [updated] = await db
+      .update(predictionWeightsTable)
+      .set({ ...nextWeights, updatedAt: new Date() })
+      .returning();
+    updatedWeights = updated ? { ...updated, updatedAt: updated.updatedAt.toISOString() } : null;
+  }
+
+  const { actionResults, triggeredAnalysis } = await executeChatActions(aiResult.actionSuggestions, raceId ?? null);
+
+  const confirmationLines: string[] = [];
+  if (updatedWeights) {
+    confirmationLines.push(`- Saved weights in app: ${formatWeightLine(getWeightSnapshot(updatedWeights))}`);
+  }
+  for (const result of actionResults) {
+    confirmationLines.push(`- ${result.detail}`);
+  }
+
+  const finalReply = confirmationLines.length > 0
+    ? `${aiResult.reply}\n\nApp actions:\n${confirmationLines.join("\n")}`.trim()
+    : aiResult.reply;
 
   await db.insert(chatMessagesTable).values({
     role: "assistant",
-    content: aiResult.reply,
+    content: finalReply,
     raceId: raceId ?? null,
   });
 
-  let updatedWeights = null;
-  if (aiResult.weightSuggestions) {
-    const suggestions = aiResult.weightSuggestions;
-    const nextWeights = {
-      courseForm: suggestions.courseForm ?? weights.courseForm,
-      formDistance: suggestions.formDistance ?? weights.formDistance,
-      jockeyTrainer: suggestions.jockeyTrainer ?? weights.jockeyTrainer,
-      oddsMovement: suggestions.oddsMovement ?? weights.oddsMovement,
-      history: suggestions.history ?? weights.history,
-    };
-    const total = Object.values(nextWeights).reduce((sum, value) => sum + value, 0);
-    if (Math.abs(total - 1.0) < 0.05) {
-      const [updated] = await db
-        .update(predictionWeightsTable)
-        .set({ ...nextWeights, updatedAt: new Date() })
-        .returning();
-      updatedWeights = updated ? { ...updated, updatedAt: updated.updatedAt.toISOString() } : null;
-    }
-  }
-
   res.json({
-    message: aiResult.reply,
+    message: finalReply,
     updatedWeights,
-    triggeredAnalysis: false,
+    triggeredAnalysis,
+    actionResults,
   });
 });
 

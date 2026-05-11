@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { db, racesTable, horsesTable } from "@workspace/db";
-import { buildRaceForecastCards, buildWeeklyOverview, getLearningPerformanceSummary } from "../lib/race-insights";
+import {
+  buildRaceForecastCards,
+  buildWeeklyOverview,
+  getLearningPerformanceSummary,
+  isRaceHistoryCard,
+  isRaceLiveCard,
+  sortRaceCardsByLivePriority,
+} from "../lib/race-insights";
 
 const router = Router();
 
@@ -10,20 +17,16 @@ router.get("/dashboard/summary", async (_req, res) => {
   const cards = await buildRaceForecastCards(races);
   const performance = await getLearningPerformanceSummary();
 
-  const todayCards = cards
-    .filter((card) => card.isToday)
-    .sort((left, right) => {
-      const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-      const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-      return leftMinutes - rightMinutes || right.prominence - left.prominence;
-    });
+  const liveCards = sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard));
+  const historyCards = cards.filter(isRaceHistoryCard);
+  const todayCards = liveCards.filter((card) => card.isToday);
 
   const weeklyCards = cards.filter((card) => card.isThisWeek);
-  const upcoming = cards.filter((card) => card.status === "upcoming" || card.status === "analyzing");
+  const upcoming = liveCards.filter((card) => card.status === "upcoming" || card.status === "analyzing");
   const analyzed = cards.filter((card) => !!card.topPrediction);
-  const completed = cards.filter((card) => card.status === "completed");
+  const completed = historyCards.filter((card) => card.status === "completed");
 
-  const featuredCard = [...todayCards, ...upcoming]
+  const featuredCard = [...todayCards, ...liveCards]
     .filter((card) => card.topPrediction)
     .sort((left, right) => {
       const leftScore = (left.isToday ? 1 : 0) * 2 + (left.topPrediction?.confidence ?? 0) + left.prominence;
@@ -39,8 +42,8 @@ router.get("/dashboard/summary", async (_req, res) => {
     totalHorses: horses.length,
     todayRaceCount: todayCards.length,
     weekRaceCount: weeklyCards.length,
-    nextRaceTime: todayCards[0]?.raceTime ?? upcoming[0]?.raceTime ?? null,
-    nextRaceVenue: todayCards[0]?.venue ?? upcoming[0]?.venue ?? null,
+    nextRaceTime: todayCards[0]?.raceTime ?? liveCards[0]?.raceTime ?? null,
+    nextRaceVenue: todayCards[0]?.venue ?? liveCards[0]?.venue ?? null,
     topPick: featuredCard?.topPrediction?.horseName ?? null,
     topPickRace: featuredCard?.name ?? null,
     venues: [...new Set(cards.map((card) => card.venue))],

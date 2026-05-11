@@ -255,6 +255,7 @@ export default function RaceDetail() {
   const activeHorses = horses.filter((horse) => !horse.scratched);
   const scratchedHorses = horses.filter((horse) => horse.scratched);
   const sortedPredictions = [...(predictions ?? [])].sort((left, right) => left.rank - right.rank);
+  const raceIsOver = Boolean(race?.result) || race?.status === "completed" || race?.status === "cancelled" || ((race?.minutesToRace ?? 1) <= 0);
 
   const handleAnalyze = async () => {
     try {
@@ -302,9 +303,9 @@ export default function RaceDetail() {
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {!race.result && <button onClick={() => setShowResultModal(true)} disabled={activeHorses.length === 0} className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"><Flag className="size-4" />Record Result</button>}
-          <button onClick={handleAnalyze} disabled={analyzeRace.isPending || activeHorses.length === 0} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
+          <button onClick={handleAnalyze} disabled={raceIsOver || analyzeRace.isPending || activeHorses.length === 0} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
             {analyzeRace.isPending ? <RefreshCw className="size-4 animate-spin" /> : <Zap className="size-4" />}
-            {analyzeRace.isPending ? "Analyzing..." : "Analyze"}
+            {analyzeRace.isPending ? "Analyzing..." : raceIsOver ? "Race over" : "Analyze"}
           </button>
         </div>
       </div>

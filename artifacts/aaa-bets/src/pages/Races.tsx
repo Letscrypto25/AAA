@@ -17,6 +17,16 @@ import {
   formatMinutesToRace,
   getOutcomeTone,
 } from "@/lib/forecast";
+import {
+  filterAndRankRaceCards,
+  isHistoryRaceCard,
+  isLiveRaceCard,
+  sortHistoryRaceCards,
+  sortLiveRaceCards,
+  type SearchableRaceCard,
+  type SearchablePrediction,
+  type SearchableResult,
+} from "@/lib/race-board";
 
 const VENUES = [
   "Kenilworth",
@@ -31,10 +41,12 @@ const VENUES = [
 ] as const;
 
 const SURFACES = ["turf", "polytrack", "dirt"] as const;
-const FILTERS = ["all", "today", "week", "upcoming", "completed"] as const;
+const FILTERS = ["all", "today", "week"] as const;
+const VIEW_MODES = ["live", "results"] as const;
 
 type RaceFilter = (typeof FILTERS)[number];
-type BaseRace = Record<string, any>;
+type RaceViewMode = (typeof VIEW_MODES)[number];
+type BaseRace = SearchableRaceCard & Record<string, any>;
 type AddRaceForm = {
   raceNumber: number;
   name: string;
@@ -46,7 +58,7 @@ type AddRaceForm = {
   grade: string;
   prize: string;
 };
-type RacePredictionSummary = {
+type RacePredictionSummary = SearchablePrediction & {
   id: number;
   horseId: number;
   horseName: string;
@@ -54,12 +66,21 @@ type RacePredictionSummary = {
   confidence: number;
   resultStatus: string;
 };
-type RaceResultSummary = {
+type RaceResultSummary = SearchableResult & {
   winnerHorseName: string;
   recordedAt: string;
   topPickCorrect: boolean | null;
 };
 type RaceCard = BaseRace & {
+  id: number;
+  raceNumber: number;
+  name: string;
+  venue: string;
+  raceTime: string;
+  status: string;
+  surface: string;
+  distance: number;
+  horseCount: number;
   isToday: boolean;
   isThisWeek: boolean;
   dayLabel: string;
@@ -319,30 +340,32 @@ export default function Races() {
   const usableRaces = races.filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<RaceFilter>("all");
+  const [viewMode, setViewMode] = useState<RaceViewMode>("live");
   const [showAdd, setShowAdd] = useState(false);
 
+  const liveRaces = useMemo(() => sortLiveRaceCards(usableRaces.filter(isLiveRaceCard)), [usableRaces]);
+  const historyRaces = useMemo(() => sortHistoryRaceCards(usableRaces.filter(isHistoryRaceCard)), [usableRaces]);
+
   const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
+    const source = viewMode === "live" ? liveRaces : historyRaces;
+    const filteredByView = source.filter((race) => {
+      if (filter === "today") return race.isToday;
+      if (filter === "week") return race.isThisWeek;
+      return true;
+    });
 
-    return usableRaces
-      .filter((race) => {
-        if (filter === "today" && !race.isToday) return false;
-        if (filter === "week" && !race.isThisWeek) return false;
-        if (filter === "upcoming" && !["upcoming", "analyzing"].includes(race.status)) return false;
-        if (filter === "completed" && race.status !== "completed") return false;
+    return filterAndRankRaceCards(filteredByView, search);
+  }, [filter, historyRaces, liveRaces, search, viewMode]);
 
-        if (!term) return true;
-        return [race.name, race.venue, race.topPrediction?.horseName ?? "", race.dayLabel]
-          .join(" ")
-          .toLowerCase()
-          .includes(term);
-      })
-      .sort((left, right) => {
-        const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-        const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
-        return leftMinutes - rightMinutes || right.prominence - left.prominence;
-      });
-  }, [filter, search, usableRaces]);
+  const liveTodayCount = liveRaces.filter((race) => race.isToday).length;
+  const visibleCount = viewMode === "live" ? liveRaces.length : historyRaces.length;
+  const viewTitle = viewMode === "live" ? "Live board" : "Results and history";
+  const viewDescription = viewMode === "live"
+    ? "Upcoming and analyzing races stay here so the main board stays clean."
+    : "Completed and over races stay stored here for grading, learning, and review.";
+  const searchPlaceholder = viewMode === "live"
+    ? "Search race, venue, horse, jockey, trainer, grade, or date..."
+    : "Search past winners, top picks, venues, horse names, or dates...";
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
@@ -356,7 +379,7 @@ export default function Races() {
             Weekly card
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            A simpler list of live races, top picks, and recorded results.
+            Faster live reads up front, with results and learning history kept in their own lane.
           </p>
         </div>
         <button
@@ -373,13 +396,27 @@ export default function Races() {
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input
             type="search"
-            placeholder="Search races, venues, or top picks..."
+            placeholder={searchPlaceholder}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             className="w-full rounded-xl border border-card-border bg-card py-3 pl-9 pr-4 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
         <div className="flex flex-wrap gap-2">
+          {VIEW_MODES.map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-xs font-medium capitalize transition-colors",
+                viewMode === mode
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {mode === "live" ? "Live" : "Results"}
+            </button>
+          ))}
           {FILTERS.map((option) => (
             <button
               key={option}
@@ -399,19 +436,29 @@ export default function Races() {
 
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Visible now</p>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.length}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Only races with real runners, picks, or results</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Live board</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{liveRaces.length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Upcoming and analyzing races kept in the active view</p>
         </div>
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Today</p>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.filter((race) => race.isToday).length}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Current-day races ready to read quickly</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Live today</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{liveTodayCount}</p>
+          <p className="mt-1 text-xs text-muted-foreground">What still matters on the current card</p>
         </div>
         <div className="rounded-2xl border border-card-border bg-card p-4">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Completed</p>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{usableRaces.filter((race) => race.status === "completed").length}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Results already graded back into the model</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Results archive</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground">{historyRaces.length}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Completed and over races kept for grading and review</p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-card-border bg-card px-5 py-4">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-foreground">{viewTitle}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{viewDescription}</p>
+          </div>
+          <p className="text-xs text-muted-foreground">{visibleCount} stored race(s) in this view</p>
         </div>
       </div>
 
@@ -426,7 +473,11 @@ export default function Races() {
           <CalendarDays className="mx-auto mb-3 size-10 text-muted-foreground" />
           <p className="font-medium text-foreground">No races match this view</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {search ? "Try a broader search term." : "Add a race or sync the weekly card to get started."}
+            {search
+              ? "Try a broader search term or switch views."
+              : viewMode === "live"
+                ? "Add a race or sync the weekly card to load the live board."
+                : "Completed and over races will appear here once results start landing."}
           </p>
         </div>
       ) : (
@@ -440,6 +491,9 @@ export default function Races() {
                       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Race {race.raceNumber}</span>
                       <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.dayLabel}</span>
                       {race.grade && <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{race.grade}</span>}
+                      {viewMode === "live" && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground capitalize">{race.status}</span>
+                      )}
                       {race.result && (
                         <span
                           className={cn(
@@ -448,6 +502,11 @@ export default function Races() {
                           )}
                         >
                           {race.result.topPickCorrect ? "Hit" : "Miss"}
+                        </span>
+                      )}
+                      {!race.result && viewMode === "results" && (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300">
+                          Result pending
                         </span>
                       )}
                     </div>
@@ -472,19 +531,19 @@ export default function Races() {
                                 : "border-border bg-muted/60 text-muted-foreground",
                             )}
                           >
-                            #{prediction.rank} {prediction.horseName} {Math.round(prediction.confidence * 100)}%
+                            #{prediction.rank} {prediction.horseName} {Math.round((prediction.confidence ?? 0) * 100)}%
                           </span>
                         ))}
                       </div>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 lg:min-w-[230px] lg:justify-end">
+                  <div className="flex items-center gap-3 lg:min-w-[250px] lg:justify-end">
                     <div className="min-w-0 text-left lg:text-right">
                       {race.result ? (
                         <>
                           <p className="text-sm font-semibold text-foreground">Winner: {race.result.winnerHorseName}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">Recorded result</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Recorded result kept in learning history</p>
                         </>
                       ) : race.topPrediction ? (
                         <>
@@ -493,11 +552,13 @@ export default function Races() {
                             {race.topPrediction.horseName}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {Math.round(race.topPrediction.confidence * 100)}% confidence · {formatConfidenceBand(race.forecastBand)}
+                            {viewMode === "results"
+                              ? "Race is over. Record the official result when it lands."
+                              : `${Math.round((race.topPrediction.confidence ?? 0) * 100)}% confidence | ${formatConfidenceBand(race.forecastBand)}`}
                           </p>
                         </>
                       ) : (
-                        <p className="text-sm text-muted-foreground">Forecast pending</p>
+                        <p className="text-sm text-muted-foreground">{viewMode === "results" ? "Awaiting official result" : "Forecast pending"}</p>
                       )}
                     </div>
                     <ChevronRight className="size-4 shrink-0 text-muted-foreground" />

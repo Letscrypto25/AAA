@@ -44,6 +44,15 @@ export type RaceResultSummary = {
   topPickCorrect: boolean | null;
 };
 
+export type RaceSearchContext = {
+  text: string;
+  horseNames: string[];
+  jockeys: string[];
+  trainers: string[];
+  topPickHorseName: string | null;
+  winnerHorseName: string | null;
+};
+
 export type RaceForecastCard = {
   id: number;
   raceNumber: number;
@@ -70,6 +79,7 @@ export type RaceForecastCard = {
   topPrediction: RacePredictionSummary | null;
   topPredictions: RacePredictionSummary[];
   result: RaceResultSummary | null;
+  searchContext: RaceSearchContext;
 };
 
 export type LearningPerformanceSummary = {
@@ -108,6 +118,83 @@ export type WeeklyOverviewDay = {
   spotlightHorseName: string | null;
   spotlightConfidence: number | null;
 };
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function buildSearchContext(
+  race: RaceRow,
+  horses: HorseRow[],
+  topPrediction: RacePredictionSummary | null,
+  result: RaceResultSummary | null,
+): RaceSearchContext {
+  const horseNames = uniqueStrings(horses.map((horse) => horse.name));
+  const jockeys = uniqueStrings(horses.map((horse) => horse.jockey));
+  const trainers = uniqueStrings(horses.map((horse) => horse.trainer));
+  const meetingDate = race.meetingDate ?? "";
+  const dayLabel = getRelativeDayLabel(race.meetingDate);
+  const searchParts = [
+    race.name,
+    race.venue,
+    dayLabel,
+    `race ${race.raceNumber}`,
+    `r${race.raceNumber}`,
+    race.status,
+    race.grade ?? "",
+    race.surface,
+    meetingDate,
+    topPrediction?.horseName ?? "",
+    result?.winnerHorseName ?? "",
+    result?.runnerUpHorseName ?? "",
+    result?.thirdHorseName ?? "",
+    horseNames.join(" "),
+    jockeys.join(" "),
+    trainers.join(" "),
+  ].filter(Boolean);
+
+  return {
+    text: searchParts.join(" | "),
+    horseNames,
+    jockeys,
+    trainers,
+    topPickHorseName: topPrediction?.horseName ?? null,
+    winnerHorseName: result?.winnerHorseName ?? null,
+  };
+}
+
+export function isRaceHistoryCard(card: Pick<RaceForecastCard, "minutesToRace" | "result" | "status">): boolean {
+  if (card.result) return true;
+  if (card.status === "completed" || card.status === "cancelled") return true;
+  return typeof card.minutesToRace === "number" && card.minutesToRace <= 0;
+}
+
+export function isRaceLiveCard(card: Pick<RaceForecastCard, "minutesToRace" | "result" | "status">): boolean {
+  return !isRaceHistoryCard(card);
+}
+
+export function sortRaceCardsByLivePriority(cards: RaceForecastCard[]): RaceForecastCard[] {
+  return [...cards].sort((left, right) => {
+    const leftMinutes = left.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+    const rightMinutes = right.minutesToRace ?? Number.MAX_SAFE_INTEGER;
+    return (right.isToday ? 1 : 0) - (left.isToday ? 1 : 0)
+      || leftMinutes - rightMinutes
+      || (right.topPrediction?.confidence ?? 0) - (left.topPrediction?.confidence ?? 0)
+      || right.prominence - left.prominence
+      || left.raceNumber - right.raceNumber;
+  });
+}
+
+export function sortRaceCardsByHistoryPriority(cards: RaceForecastCard[]): RaceForecastCard[] {
+  return [...cards].sort((left, right) => {
+    const leftRecordedAt = left.result ? Date.parse(left.result.recordedAt) : Number.NEGATIVE_INFINITY;
+    const rightRecordedAt = right.result ? Date.parse(right.result.recordedAt) : Number.NEGATIVE_INFINITY;
+    return rightRecordedAt - leftRecordedAt
+      || (right.meetingDate ?? "").localeCompare(left.meetingDate ?? "")
+      || (right.raceTime ?? "").localeCompare(left.raceTime ?? "")
+      || right.raceNumber - left.raceNumber;
+  });
+}
 
 function mapPredictionSummary(prediction: PredictionRow, horsesById: Map<number, HorseRow>): RacePredictionSummary {
   return {
@@ -177,11 +264,13 @@ export async function buildRaceForecastCards(races?: RaceRow[]): Promise<RaceFor
   }
 
   return raceRows.map((race) => {
+    const raceHorses = (horsesByRace.get(race.id) ?? []).sort((left, right) => left.number - right.number);
     const racePredictions = (predictionsByRace.get(race.id) ?? []).sort((left, right) => left.rank - right.rank);
     const topPredictions = racePredictions.slice(0, 3).map((prediction) => mapPredictionSummary(prediction, horsesById));
     const topPrediction = topPredictions[0] ?? null;
     const resultRow = resultsByRace.get(race.id);
     const timeProfile = getRaceTimeProfile(race.raceTime, race.meetingDate);
+    const result = resultRow ? mapResultSummary(resultRow, horsesById, topPrediction) : null;
 
     return {
       id: race.id,
@@ -195,7 +284,7 @@ export async function buildRaceForecastCards(races?: RaceRow[]): Promise<RaceFor
       surface: race.surface,
       grade: race.grade ?? null,
       prize: race.prize ?? null,
-      horseCount: (horsesByRace.get(race.id) ?? []).length,
+      horseCount: raceHorses.length,
       nextUpdateAt: race.nextUpdateAt?.toISOString() ?? null,
       lastAnalyzedAt: race.lastAnalyzedAt?.toISOString() ?? null,
       createdAt: race.createdAt.toISOString(),
@@ -208,7 +297,8 @@ export async function buildRaceForecastCards(races?: RaceRow[]): Promise<RaceFor
       prominence: timeProfile.prominence,
       topPrediction,
       topPredictions,
-      result: resultRow ? mapResultSummary(resultRow, horsesById, topPrediction) : null,
+      result,
+      searchContext: buildSearchContext(race, raceHorses, topPrediction, result),
     };
   });
 }
