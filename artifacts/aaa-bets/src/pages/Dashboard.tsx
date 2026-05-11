@@ -1,7 +1,14 @@
 import { useMemo, useState } from "react";
-import { useGetDashboardSummary } from "@workspace/api-client-react";
+import {
+  getGetDashboardSummaryQueryKey,
+  getGetRacesQueryKey,
+  useAnalyzeRace,
+  useGetDashboardSummary,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
+  AlertCircle,
   CalendarDays,
   CheckCircle,
   Clock,
@@ -10,6 +17,7 @@ import {
   Target,
   TrendingUp,
   Trophy,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
@@ -75,11 +83,16 @@ function SyncBar() {
 }
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
+  const analyzeRace = useAnalyzeRace();
   const { data: summary, isLoading } = useGetDashboardSummary();
+  const [analyzingToday, setAnalyzingToday] = useState(false);
+  const [analyzeTodayResult, setAnalyzeTodayResult] = useState<{ status: "idle" | "success" | "error"; count?: number; failed?: number }>({ status: "idle" });
 
   const todayCards = summary?.todayCards ?? [];
   const weeklyOverview = summary?.weeklyOverview ?? [];
   const performance = summary?.performance;
+  const analyzableTodayRaces = todayCards.filter((race) => race.horseCount > 0 && race.status !== "completed");
 
   const nextUpRace = useMemo(
     () =>
@@ -96,6 +109,33 @@ export default function Dashboard() {
         .sort((left, right) => (right.topPrediction?.confidence ?? 0) - (left.topPrediction?.confidence ?? 0))[0],
     [todayCards],
   );
+
+  const handleAnalyzeToday = async () => {
+    if (analyzingToday || analyzableTodayRaces.length === 0) return;
+
+    setAnalyzingToday(true);
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const race of analyzableTodayRaces) {
+      try {
+        await analyzeRace.mutateAsync({ raceId: race.id });
+        successCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+    await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+
+    setAnalyzeTodayResult({
+      status: failedCount > 0 ? "error" : "success",
+      count: successCount,
+      failed: failedCount,
+    });
+    setAnalyzingToday(false);
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -117,6 +157,30 @@ export default function Dashboard() {
       </div>
 
       <SyncBar />
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-card-border bg-card px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">Analyze today’s races</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Run the forecast engine across every loaded race on today’s card in one go.
+          </p>
+          {analyzeTodayResult.status !== "idle" && (
+            <p className={cn("mt-2 text-xs font-medium", analyzeTodayResult.status === "success" ? "text-emerald-300" : "text-amber-300")}>
+              {analyzeTodayResult.status === "success"
+                ? `Analyzed ${analyzeTodayResult.count ?? 0} race(s).`
+                : `Analyzed ${analyzeTodayResult.count ?? 0} race(s), ${analyzeTodayResult.failed ?? 0} failed.`}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={handleAnalyzeToday}
+          disabled={analyzingToday || analyzableTodayRaces.length === 0}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {analyzeTodayResult.status === "error" && !analyzingToday ? <AlertCircle className="size-4" /> : <Zap className={cn("size-4", analyzingToday && "animate-pulse")} />}
+          {analyzingToday ? `Analyzing ${analyzableTodayRaces.length}...` : `Analyze today (${analyzableTodayRaces.length})`}
+        </button>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Today" value={summary?.todayRaceCount ?? 0} note="Live races on today’s card" />
