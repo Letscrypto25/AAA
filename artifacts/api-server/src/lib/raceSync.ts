@@ -19,6 +19,17 @@ import {
   type ToteRace,
   type ToteRunner,
 } from "./tote";
+import {
+  fetchTheRacingApiRacecardsByDate,
+  fetchTheRacingApiRaceDetail,
+  fetchTheRacingApiResultDetail,
+  fetchTheRacingApiResultsByDate,
+  isTheRacingApiConfigured,
+  type NormalizedRaceCard,
+  type NormalizedRaceResult,
+  type NormalizedRunner,
+  type RaceSyncSource,
+} from "./theracingapi";
 import { getNextUpdateTime } from "./scheduler";
 import { recordRaceResult, runRaceForecast } from "./forecasting";
 import { addDaysToDateKey, getTodayDateKey } from "./race-time";
@@ -39,6 +50,10 @@ function intFrom(value?: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function normalizeVenueKey(value: string): string {
+  return value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 function buildTrainerJockeyRecord(runner: ToteRunner): string {
   const parts = [runner.JockeyStats?.trim(), runner.TrainerStats?.trim()].filter(Boolean);
   return parts.join(" | ");
@@ -57,22 +72,98 @@ function getRunnerOpeningOdds(runner: ToteRunner): number | null {
   return parseDecimalOdds(runner.BettingForecast) ?? parseDecimalOdds(runner.Odds) ?? parseDecimalOdds(runner.Tote_Odds);
 }
 
-function mapRaceStatus(detail: ToteRace): string {
+function mapToteRaceStatus(detail: ToteRace): "upcoming" | "completed" | "cancelled" {
   const status = `${detail.RaceStatus || ""} ${detail.RaceStatusCode || ""}`.toUpperCase();
   if (status.includes("CANCEL") || status.includes("ABANDON")) return "cancelled";
   if (hasOfficialResult(detail)) return "completed";
   return "upcoming";
 }
 
+function buildToteResult(detail: ToteRace): NormalizedRaceResult | null {
+  if (!hasOfficialResult(detail)) return null;
+  const placings = getOfficialPlacings(detail);
+  return {
+    winner: placings.winner,
+    runnerUp: placings.runnerUp,
+    third: placings.third,
+    official: true,
+    notes: "Official Tote/4Racing result sync",
+  };
+}
+
+function normalizeToteRunner(runner: ToteRunner, scratchedNumbers: Set<number>): NormalizedRunner | null {
+  const number = intFrom(runner.Saddle || runner.Runner);
+  if (!number || !runner.Name?.trim()) return null;
+
+  const scratched = isRunnerScratched(runner, scratchedNumbers);
+  return {
+    number,
+    name: runner.Name.trim(),
+    jockey: (runner.Jockey || "Unknown jockey").trim(),
+    trainer: (runner.TrainerCurrent || "Unknown trainer").trim(),
+    form: formatRunnerForm(runner.L3),
+    weight: numberFrom(runner.Weight),
+    currentOdds: getRunnerCurrentOdds(runner),
+    openingOdds: getRunnerOpeningOdds(runner),
+    scratched,
+    scratchReason: scratched ? "Marked scratched by Tote feed" : null,
+    courseRecord: (intFrom(runner.Crse_Wins) ?? 0) > 0 || (intFrom(runner.Crse_Places) ?? 0) > 0,
+    distanceRecord: (intFrom(runner.Dist_Wins) ?? 0) > 0 || (intFrom(runner.Dist_Places) ?? 0) > 0,
+    trainerJockeyRecord: buildTrainerJockeyRecord(runner),
+    notes: runner.RunnerComment?.trim() || null,
+  };
+}
+
+function normalizeToteRace(program: ToteProgram, detail: ToteRace): NormalizedRaceCard {
+  const scratchedNumbers = getScratchedRunnerNumbers(detail);
+  const venue = toDisplayVenue(program, detail);
+  const meetingDate = getProgramDateKey(detail.ProgramDate || program.ProgramDate);
+  const raceNumber = parseRaceNumber(detail);
+  return {
+    source: "tote",
+    sourceRaceId: null,
+    meetingDate,
+    venue,
+    raceNumber,
+    name: (detail.RaceTitle || `${venue} Race ${raceNumber}`).trim(),
+    distance: parseDistanceMeters(detail.Distance),
+    raceTime: parseRaceTime(detail.AdvertisedStartTime || program.AdvertisedStartTime),
+    surface: parseSurface(detail.Surface),
+    grade: detail.Description?.trim() || null,
+    prize: detail.Stakegross?.trim() || null,
+    status: mapToteRaceStatus(detail),
+    runners: (detail.Runners ?? [])
+      .map((runner) => normalizeToteRunner(runner, scratchedNumbers))
+      .filter((runner): runner is NormalizedRunner => runner !== null),
+    result: buildToteResult(detail),
+  };
+}
+
+function mergeResultIntoRacecard(card: NormalizedRaceCard, result: NormalizedRaceResult | null | undefined): NormalizedRaceCard {
+  if (!result?.official) return card;
+  return {
+    ...card,
+    status: card.status === "cancelled" ? "cancelled" : "completed",
+    result,
+  };
+}
+
+function hasNormalizedOfficialResult(card: NormalizedRaceCard): boolean {
+  return !!card.result?.official && card.result.winner !== null;
+}
+
+function hasLiveCard(card: NormalizedRaceCard): boolean {
+  return card.runners.some((runner) => !!runner.name.trim()) || hasNormalizedOfficialResult(card);
+}
+
 type OfficialResultSyncOutcome = "none" | "recorded" | "already-recorded" | "pending";
 
 function getSyncedRaceStatus(
   race: typeof racesTable.$inferSelect,
-  detail: ToteRace,
+  card: NormalizedRaceCard,
   resultOutcome: OfficialResultSyncOutcome,
 ): { status: string; nextUpdateAt: Date | null } {
-  const feedStatus = mapRaceStatus(detail);
-  if (feedStatus === "cancelled") {
+  if (card.status === "cancelled") {
     return {
       status: "cancelled",
       nextUpdateAt: null,
@@ -86,7 +177,7 @@ function getSyncedRaceStatus(
     };
   }
 
-  if (hasOfficialResult(detail)) {
+  if (hasNormalizedOfficialResult(card)) {
     return {
       status: "analyzing",
       nextUpdateAt: getNextUpdateTime(race.raceTime, race.meetingDate),
@@ -94,56 +185,79 @@ function getSyncedRaceStatus(
   }
 
   return {
-    status: race.status === "completed" ? "analyzing" : feedStatus,
+    status: race.status === "completed" ? "analyzing" : card.status,
     nextUpdateAt: getNextUpdateTime(race.raceTime, race.meetingDate),
   };
 }
 
-async function findRace(program: ToteProgram, detail: ToteRace): Promise<typeof racesTable.$inferSelect | null> {
-  const venue = toDisplayVenue(program, detail);
-  const raceNumber = parseRaceNumber(detail);
-  const meetingDate = getProgramDateKey(detail.ProgramDate || program.ProgramDate);
+async function findRace(card: NormalizedRaceCard): Promise<typeof racesTable.$inferSelect | null> {
   const rows = await db
     .select()
     .from(racesTable)
     .where(
       and(
-        eq(racesTable.venue, venue),
-        eq(racesTable.raceNumber, raceNumber),
-        eq(racesTable.meetingDate, meetingDate),
+        eq(racesTable.venue, card.venue),
+        eq(racesTable.raceNumber, card.raceNumber),
+        eq(racesTable.meetingDate, card.meetingDate),
       ),
     )
     .limit(1);
 
+  if (rows[0]) return rows[0];
+
+  const fallbackRows = await db
+    .select()
+    .from(racesTable)
+    .where(
+      and(
+        eq(racesTable.raceNumber, card.raceNumber),
+        eq(racesTable.meetingDate, card.meetingDate),
+      ),
+    );
+
+  if (fallbackRows.length === 1) return fallbackRows[0] ?? null;
+  if (card.raceTime && card.raceTime !== "00:00") {
+    const timeMatched = fallbackRows.filter((race) => race.raceTime === card.raceTime);
+    if (timeMatched.length === 1) return timeMatched[0] ?? null;
+  }
+
+  return null;
+}
+
+async function loadRaceById(raceId: number): Promise<typeof racesTable.$inferSelect | null> {
+  const rows = await db.select().from(racesTable).where(eq(racesTable.id, raceId)).limit(1);
   return rows[0] ?? null;
 }
 
-async function upsertRace(program: ToteProgram, detail: ToteRace): Promise<{ race: typeof racesTable.$inferSelect; created: boolean }> {
-  const existingRace = await findRace(program, detail);
-  const venue = toDisplayVenue(program, detail);
-  const raceNumber = parseRaceNumber(detail);
-  const meetingDate = getProgramDateKey(detail.ProgramDate || program.ProgramDate);
-  const raceTime = parseRaceTime(detail.AdvertisedStartTime || program.AdvertisedStartTime);
-  const status = mapRaceStatus(detail);
+async function upsertRace(
+  card: NormalizedRaceCard,
+  existingRaceId?: number,
+): Promise<{ race: typeof racesTable.$inferSelect; created: boolean }> {
+  const existingRace = existingRaceId ? await loadRaceById(existingRaceId) : await findRace(card);
+  const raceTime = card.raceTime !== "00:00" ? card.raceTime : existingRace?.raceTime ?? "00:00";
+  const status = hasNormalizedOfficialResult(card) ? "completed" : card.status;
 
   const values = {
-    raceNumber,
-    name: (detail.RaceTitle || `${venue} Race ${raceNumber}`).trim(),
-    venue,
-    distance: parseDistanceMeters(detail.Distance),
+    raceNumber: card.raceNumber,
+    name: (card.name || `${card.venue} Race ${card.raceNumber}`).trim(),
+    venue: card.venue,
+    distance: card.distance > 0 ? card.distance : existingRace?.distance ?? 0,
     raceTime,
-    surface: parseSurface(detail.Surface),
-    grade: detail.Description?.trim() || null,
-    prize: detail.Stakegross?.trim() || null,
-    meetingDate,
+    surface: card.surface || existingRace?.surface || "turf",
+    grade: card.grade ?? existingRace?.grade ?? null,
+    prize: card.prize ?? existingRace?.prize ?? null,
+    meetingDate: card.meetingDate,
     status,
-    syncedFrom: "tote",
-    nextUpdateAt: status === "completed" || status === "cancelled" ? null : getNextUpdateTime(raceTime, meetingDate),
+    syncedFrom: card.source,
+    nextUpdateAt: status === "completed" || status === "cancelled" ? null : getNextUpdateTime(raceTime, card.meetingDate),
   };
 
   if (!existingRace) {
     const [race] = await db.insert(racesTable).values(values).returning();
-    logger.info({ raceId: race.id, venue, raceNumber, meetingDate }, "Race created from Tote sync");
+    logger.info(
+      { raceId: race.id, venue: card.venue, raceNumber: card.raceNumber, meetingDate: card.meetingDate, source: card.source },
+      "Race created from sync",
+    );
     return { race, created: true };
   }
 
@@ -156,20 +270,18 @@ async function upsertRace(program: ToteProgram, detail: ToteRace): Promise<{ rac
   return { race, created: false };
 }
 
-async function syncRaceHorses(raceId: number, detail: ToteRace): Promise<void> {
+async function syncRaceHorses(raceId: number, card: NormalizedRaceCard): Promise<void> {
   const existingHorses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
   const horseByNumber = new Map(existingHorses.map((horse) => [horse.number, horse]));
   const liveNumbers = new Set<number>();
-  const scratchedNumbers = getScratchedRunnerNumbers(detail);
 
-  for (const runner of detail.Runners ?? []) {
-    const number = intFrom(runner.Saddle || runner.Runner);
-    if (!number || !runner.Name?.trim()) continue;
-    liveNumbers.add(number);
+  for (const runner of card.runners) {
+    if (!runner.number || !runner.name.trim()) continue;
+    liveNumbers.add(runner.number);
 
-    const existing = horseByNumber.get(number);
-    const currentOdds = getRunnerCurrentOdds(runner);
-    const openingOdds = existing?.openingOdds ?? getRunnerOpeningOdds(runner);
+    const existing = horseByNumber.get(runner.number);
+    const currentOdds = runner.currentOdds ?? existing?.currentOdds ?? runner.openingOdds ?? 0;
+    const openingOdds = existing?.openingOdds ?? runner.openingOdds ?? null;
     const previousOdds = existing?.currentOdds ?? openingOdds ?? currentOdds;
     const oddsMovement =
       currentOdds > 0 && previousOdds > 0
@@ -182,21 +294,21 @@ async function syncRaceHorses(raceId: number, detail: ToteRace): Promise<void> {
 
     const values = {
       raceId,
-      name: runner.Name.trim(),
-      number,
-      jockey: (runner.Jockey || "Unknown jockey").trim(),
-      trainer: (runner.TrainerCurrent || "Unknown trainer").trim(),
-      form: formatRunnerForm(runner.L3),
-      weight: numberFrom(runner.Weight),
-      currentOdds: currentOdds > 0 ? currentOdds : existing?.currentOdds ?? 0,
+      name: runner.name,
+      number: runner.number,
+      jockey: runner.jockey || existing?.jockey || "Unknown jockey",
+      trainer: runner.trainer || existing?.trainer || "Unknown trainer",
+      form: runner.form || existing?.form || "",
+      weight: runner.weight ?? existing?.weight ?? null,
+      currentOdds,
       openingOdds,
       oddsMovement,
-      scratched: isRunnerScratched(runner, scratchedNumbers),
-      scratchReason: isRunnerScratched(runner, scratchedNumbers) ? "Marked scratched by Tote feed" : null,
-      courseRecord: (intFrom(runner.Crse_Wins) ?? 0) > 0 || (intFrom(runner.Crse_Places) ?? 0) > 0,
-      distanceRecord: (intFrom(runner.Dist_Wins) ?? 0) > 0 || (intFrom(runner.Dist_Places) ?? 0) > 0,
-      trainerJockeyRecord: buildTrainerJockeyRecord(runner),
-      notes: runner.RunnerComment?.trim() || null,
+      scratched: runner.scratched,
+      scratchReason: runner.scratched ? runner.scratchReason ?? existing?.scratchReason ?? null : null,
+      courseRecord: runner.courseRecord || existing?.courseRecord || false,
+      distanceRecord: runner.distanceRecord || existing?.distanceRecord || false,
+      trainerJockeyRecord: runner.trainerJockeyRecord || existing?.trainerJockeyRecord || "",
+      notes: runner.notes ?? existing?.notes ?? null,
     };
 
     if (existing) {
@@ -212,25 +324,24 @@ async function syncRaceHorses(raceId: number, detail: ToteRace): Promise<void> {
       .update(horsesTable)
       .set({
         scratched: true,
-        scratchReason: "Missing from latest Tote card",
+        scratchReason: `Missing from latest ${card.source === "theracingapi" ? "The Racing API" : "Tote"} card`,
       })
       .where(eq(horsesTable.id, horse.id));
   }
 }
 
-async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<OfficialResultSyncOutcome> {
-  if (!hasOfficialResult(detail)) return "none";
+async function syncOfficialResult(raceId: number, card: NormalizedRaceCard): Promise<OfficialResultSyncOutcome> {
+  if (!hasNormalizedOfficialResult(card) || !card.result) return "none";
 
   const existingResult = await db.select().from(raceResultsTable).where(eq(raceResultsTable.raceId, raceId)).limit(1);
   if (existingResult.length > 0) return "already-recorded";
 
   const resultRows = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
   const horseByNumber = new Map(resultRows.map((horse) => [horse.number, horse]));
-  const placings = getOfficialPlacings(detail);
-  const winner = placings.winner ? horseByNumber.get(placings.winner) : null;
+  const winner = card.result.winner ? horseByNumber.get(card.result.winner) : null;
   if (!winner) {
     logger.warn(
-      { raceId, placings, availableRunnerNumbers: [...horseByNumber.keys()] },
+      { raceId, result: card.result, availableRunnerNumbers: [...horseByNumber.keys()], source: card.source },
       "Official result detected but runner mapping is incomplete; keeping race retryable",
     );
     return "pending";
@@ -239,46 +350,49 @@ async function syncOfficialResult(raceId: number, detail: ToteRace): Promise<Off
   try {
     await recordRaceResult(raceId, {
       winnerHorseId: winner.id,
-      runnerUpHorseId: placings.runnerUp ? horseByNumber.get(placings.runnerUp)?.id ?? null : null,
-      thirdHorseId: placings.third ? horseByNumber.get(placings.third)?.id ?? null : null,
-      notes: "Official Tote/4Racing result sync",
+      runnerUpHorseId: card.result.runnerUp ? horseByNumber.get(card.result.runnerUp)?.id ?? null : null,
+      thirdHorseId: card.result.third ? horseByNumber.get(card.result.third)?.id ?? null : null,
+      notes: card.result.notes ?? `Official ${card.source} result sync`,
     });
     return "recorded";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message === "Result already recorded") return "already-recorded";
-    logger.warn({ err, raceId }, "Official result sync failed");
+    logger.warn({ err, raceId, source: card.source }, "Official result sync failed");
     return "pending";
   }
 }
 
-async function syncRace(program: ToteProgram, detail: ToteRace): Promise<{ created: boolean }> {
-  const hasLiveCard = (detail.Runners ?? []).some((runner) => !!runner.Name?.trim()) || hasOfficialResult(detail);
-  if (!hasLiveCard) {
-    const existingRace = await findRace(program, detail);
+async function syncRaceCard(card: NormalizedRaceCard, existingRaceId?: number): Promise<{ created: boolean }> {
+  if (!hasLiveCard(card)) {
+    const existingRace = existingRaceId ? await loadRaceById(existingRaceId) : await findRace(card);
     if (existingRace) {
       const existingHorses = await db.select({ id: horsesTable.id }).from(horsesTable).where(eq(horsesTable.raceId, existingRace.id)).limit(1);
       if (existingHorses.length === 0) {
         await db.delete(racesTable).where(eq(racesTable.id, existingRace.id));
-        logger.info({ raceId: existingRace.id, venue: existingRace.venue, raceNumber: existingRace.raceNumber }, "Removed empty Tote shell race");
+        logger.info(
+          { raceId: existingRace.id, venue: existingRace.venue, raceNumber: existingRace.raceNumber, source: card.source },
+          "Removed empty shell race",
+        );
       }
     }
     return { created: false };
   }
 
-  const { race, created } = await upsertRace(program, detail);
-  await syncRaceHorses(race.id, detail);
-  const resultOutcome = await syncOfficialResult(race.id, detail);
-  const syncedState = getSyncedRaceStatus(race, detail, resultOutcome);
+  const { race, created } = await upsertRace(card, existingRaceId);
+  await syncRaceHorses(race.id, card);
+  const resultOutcome = await syncOfficialResult(race.id, card);
+  const syncedState = getSyncedRaceStatus(race, card, resultOutcome);
   await db
     .update(racesTable)
     .set({
       status: syncedState.status,
       nextUpdateAt: syncedState.nextUpdateAt,
+      syncedFrom: card.source,
     })
     .where(eq(racesTable.id, race.id));
 
-  if (hasOfficialResult(detail) || syncedState.status === "cancelled") {
+  if (hasNormalizedOfficialResult(card) || syncedState.status === "cancelled") {
     return { created };
   }
 
@@ -287,34 +401,137 @@ async function syncRace(program: ToteProgram, detail: ToteRace): Promise<{ creat
     try {
       await runRaceForecast(race.id, "sync");
     } catch (err) {
-      logger.warn({ err, raceId: race.id }, "Initial forecast generation failed after Tote sync");
+      logger.warn({ err, raceId: race.id, source: card.source }, "Initial forecast generation failed after sync");
     }
   }
 
   return { created };
 }
 
-export async function syncMeetingsForDate(dateKey: string): Promise<{ racesCreated: number; meetingsFound: number }> {
+function countMeetings(cards: NormalizedRaceCard[]): number {
+  return new Set(cards.map((card) => `${card.meetingDate}|${normalizeVenueKey(card.venue)}`)).size;
+}
+
+type RaceCardSourceResult = {
+  source: RaceSyncSource;
+  cards: NormalizedRaceCard[];
+  meetingsFound: number;
+};
+
+async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
   const programs = await fetchProgramsByDate(dateKey);
   if (programs.length === 0) {
-    logger.info({ date: dateKey }, "No Tote meetings found for date");
-    return { racesCreated: 0, meetingsFound: 0 };
+    return { source: "tote", cards: [], meetingsFound: 0 };
+  }
+
+  const cards: NormalizedRaceCard[] = [];
+  for (const program of programs) {
+    const programDate = getProgramDateKey(program.ProgramDate);
+    const races = await fetchProgramRaces(program.ProgramCode, programDate);
+    for (const detail of races) {
+      if (!Number.isFinite(parseRaceNumber(detail))) continue;
+      cards.push(normalizeToteRace(program, detail));
+    }
+  }
+
+  return { source: "tote", cards, meetingsFound: programs.length };
+}
+
+async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
+  if (!isTheRacingApiConfigured()) {
+    return fetchToteRaceCardsForDate(dateKey);
+  }
+
+  try {
+    const cards = await fetchTheRacingApiRacecardsByDate(dateKey);
+    let resultMap = new Map<string, NormalizedRaceResult>();
+    try {
+      resultMap = await fetchTheRacingApiResultsByDate(dateKey);
+    } catch (err) {
+      logger.warn({ err, dateKey }, "The Racing API results fetch failed; keeping racecards without result overlay");
+    }
+
+    const mergedCards = cards.map((card) => {
+      if (!card.sourceRaceId) return card;
+      return mergeResultIntoRacecard(card, resultMap.get(card.sourceRaceId));
+    });
+
+    return {
+      source: "theracingapi",
+      cards: mergedCards,
+      meetingsFound: countMeetings(mergedCards),
+    };
+  } catch (err) {
+    logger.warn({ err, dateKey }, "The Racing API sync failed; falling back to Tote");
+    return fetchToteRaceCardsForDate(dateKey);
+  }
+}
+
+function cardMatchesRace(card: NormalizedRaceCard, race: typeof racesTable.$inferSelect): boolean {
+  if (card.meetingDate !== race.meetingDate) return false;
+  if (card.raceNumber !== race.raceNumber) return false;
+
+  const venueMatches = normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue);
+
+  const raceHasTime = !!race.raceTime && race.raceTime !== "00:00";
+  const cardHasTime = !!card.raceTime && card.raceTime !== "00:00";
+  if (raceHasTime && cardHasTime && card.raceTime !== race.raceTime) return false;
+
+  return venueMatches || (raceHasTime && cardHasTime);
+}
+
+function findMatchingCard(cards: NormalizedRaceCard[], race: typeof racesTable.$inferSelect): NormalizedRaceCard | null {
+  const exactVenueMatch = cards.find((card) => (
+    card.meetingDate === race.meetingDate
+    && card.raceNumber === race.raceNumber
+    && normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue)
+    && (card.raceTime === race.raceTime || card.raceTime === "00:00" || race.raceTime === "00:00")
+  ));
+  if (exactVenueMatch) return exactVenueMatch;
+
+  return cards.find((card) => cardMatchesRace(card, race)) ?? null;
+}
+
+async function enrichTheracingRacecard(card: NormalizedRaceCard): Promise<NormalizedRaceCard> {
+  if (card.source !== "theracingapi" || !card.sourceRaceId) return card;
+
+  let enrichedCard = card;
+  try {
+    const detail = await fetchTheRacingApiRaceDetail(card.sourceRaceId);
+    if (detail) {
+      enrichedCard = mergeResultIntoRacecard(detail, detail.result);
+    }
+  } catch (err) {
+    logger.warn({ err, raceId: card.sourceRaceId }, "The Racing API race detail refresh failed; using date card payload");
+  }
+
+  if (!hasNormalizedOfficialResult(enrichedCard)) {
+    try {
+      const result = await fetchTheRacingApiResultDetail(card.sourceRaceId);
+      enrichedCard = mergeResultIntoRacecard(enrichedCard, result);
+    } catch (err) {
+      logger.warn({ err, raceId: card.sourceRaceId }, "The Racing API result detail refresh failed");
+    }
+  }
+
+  return enrichedCard;
+}
+
+export async function syncMeetingsForDate(dateKey: string): Promise<{ racesCreated: number; meetingsFound: number }> {
+  const sourceResult = await fetchPreferredRaceCardsForDate(dateKey);
+  if (sourceResult.cards.length === 0) {
+    logger.info({ date: dateKey, source: sourceResult.source }, "No meetings found for date");
+    return { racesCreated: 0, meetingsFound: sourceResult.meetingsFound };
   }
 
   let racesCreated = 0;
 
-  for (const program of programs) {
-    const programDate = getProgramDateKey(program.ProgramDate);
-    const races = await fetchProgramRaces(program.ProgramCode, programDate);
-
-    for (const detail of races) {
-      if (!Number.isFinite(parseRaceNumber(detail))) continue;
-      const result = await syncRace(program, detail);
-      if (result.created) racesCreated++;
-    }
+  for (const card of sourceResult.cards) {
+    const result = await syncRaceCard(card);
+    if (result.created) racesCreated++;
   }
 
-  return { racesCreated, meetingsFound: programs.length };
+  return { racesCreated, meetingsFound: sourceResult.meetingsFound };
 }
 
 export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCreated: number; meetingsFound: number }> {
@@ -335,7 +552,10 @@ export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCre
 export async function syncTodaysMeetings(): Promise<void> {
   const dateStr = todayDateStr();
 
-  logger.info({ date: dateStr }, "Starting weekly Tote race sync");
+  logger.info(
+    { date: dateStr, primarySource: isTheRacingApiConfigured() ? "theracingapi" : "tote" },
+    "Starting weekly race sync",
+  );
 
   try {
     const result = await syncUpcomingMeetings(7);
@@ -347,9 +567,9 @@ export async function syncTodaysMeetings(): Promise<void> {
       status: "ok",
     });
 
-    logger.info(result, "Weekly Tote race sync complete");
+    logger.info(result, "Weekly race sync complete");
   } catch (err) {
-    logger.error({ err }, "Weekly Tote race sync failed");
+    logger.error({ err }, "Weekly race sync failed");
     await db.insert(syncStateTable).values({
       lastSyncDate: dateStr,
       meetingsFound: 0,
@@ -364,37 +584,26 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
   const [race] = await db.select().from(racesTable).where(eq(racesTable.id, raceId)).limit(1);
   if (!race || !race.meetingDate) return;
 
-  const programs = await fetchProgramsByDate(race.meetingDate);
-  const normalizedRaceTime = race.raceTime;
+  let sourceResult = await fetchPreferredRaceCardsForDate(race.meetingDate);
+  let matchedCard = findMatchingCard(sourceResult.cards, race);
 
-  for (const program of programs) {
-    const programDate = getProgramDateKey(program.ProgramDate);
-    const races = await fetchProgramRaces(program.ProgramCode, programDate);
-    const detail = races.find((candidate) => {
-      const candidateRaceNumber = parseRaceNumber(candidate);
-      const candidateVenue = toDisplayVenue(program, candidate);
-      const candidateTime = parseRaceTime(candidate.AdvertisedStartTime || program.AdvertisedStartTime);
-      return candidateRaceNumber === race.raceNumber && candidateVenue === race.venue && candidateTime === normalizedRaceTime;
-    });
+  if (!matchedCard && sourceResult.source === "theracingapi") {
+    const toteFallback = await fetchToteRaceCardsForDate(race.meetingDate);
+    matchedCard = findMatchingCard(toteFallback.cards, race);
+    if (matchedCard) sourceResult = toteFallback;
+  }
 
-    if (!detail) continue;
-
-    await syncRaceHorses(raceId, detail);
-    const resultOutcome = await syncOfficialResult(raceId, detail);
-    const syncedState = getSyncedRaceStatus(race, detail, resultOutcome);
-    await db
-      .update(racesTable)
-      .set({
-        status: syncedState.status,
-        nextUpdateAt: syncedState.nextUpdateAt,
-      })
-      .where(eq(racesTable.id, raceId));
-
-    logger.info({ raceId, venue: race.venue, raceNumber: race.raceNumber }, "Race data refreshed from Tote");
+  if (!matchedCard) {
+    logger.warn({ raceId, venue: race.venue, raceNumber: race.raceNumber }, "No synced race data matched during refresh");
     return;
   }
 
-  logger.warn({ raceId, venue: race.venue, raceNumber: race.raceNumber }, "No Tote race data matched during refresh");
+  const cardToSync = matchedCard.source === "theracingapi" ? await enrichTheracingRacecard(matchedCard) : matchedCard;
+  await syncRaceCard(cardToSync, raceId);
+  logger.info(
+    { raceId, venue: race.venue, raceNumber: race.raceNumber, source: cardToSync.source },
+    "Race data refreshed",
+  );
 }
 
 export async function getLastSyncStatus(): Promise<{
