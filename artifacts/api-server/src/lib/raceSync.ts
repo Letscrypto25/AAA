@@ -51,7 +51,12 @@ function intFrom(value?: string | null): number | null {
 }
 
 function normalizeVenueKey(value: string): string {
-  return value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  return value
+    .replace(/hollywoodbets\s+/gi, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function isSyntheticToteVenue(venue: string): boolean {
@@ -536,7 +541,8 @@ async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourc
 
 async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
   try {
-    const gallopCards = await fetchGallopRacecardsByDate(dateKey);
+    const gallopResult = await fetchGallopRacecardsByDate(dateKey);
+    const gallopCards = gallopResult.cards;
     if (gallopCards.length > 0) {
       let mergedCards = gallopCards;
 
@@ -573,6 +579,8 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
       }
 
       logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; falling back to The Racing API or Tote");
+    } else if (gallopResult.listedMeetings === 0) {
+      return { source: "gallop", cards: [], meetingsFound: 0 };
     }
   } catch (err) {
     logger.warn({ err, dateKey }, "Gallop racecard sync failed; falling back to The Racing API or Tote");
