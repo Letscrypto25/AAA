@@ -32,6 +32,7 @@ const FACTOR_KEYS = [
 ] as const;
 
 type FactorKey = (typeof FACTOR_KEYS)[number];
+type LearningEntryLike = Pick<typeof forecastEntriesTable.$inferSelect, "horseId" | "rank" | "confidence" | "factors"> | Pick<typeof predictionsTable.$inferSelect, "horseId" | "rank" | "confidence" | "factors">;
 
 const DEFAULT_WEIGHTS: PredictionWeightConfig = {
   courseForm: 0.18,
@@ -706,6 +707,142 @@ function roundMovingAverage(previous: number, sampleSize: number, nextValue: num
   return round((previous * sampleSize + nextValue) / (sampleSize + 1));
 }
 
+function computeUpdatedLearningSummary(
+  learningSnapshot: LearningSummarySnapshot,
+  learningEntries: LearningEntryLike[],
+  finishMap: Map<number, number>,
+): { snapshot: LearningSummarySnapshot; topPickCorrect: boolean } | null {
+  const winnerHorseId = [...finishMap.entries()].find((entry) => entry[1] === 1)?.[0] ?? null;
+  if (!winnerHorseId) return null;
+
+  const topPick = learningEntries.find((entry) => entry.rank === 1) ?? null;
+  if (!topPick) return null;
+
+  const sampleSize = learningSnapshot.sampleSize;
+  const topPickCorrect = topPick.horseId === winnerHorseId;
+  const topPickPlaced = (finishMap.get(topPick.horseId) ?? 99) <= 3;
+  const topPickConfidence = topPick.confidence ?? 0.5;
+  const winnerEntry = learningEntries.find((entry) => entry.horseId === winnerHorseId);
+
+  const nextAdjustments: LearningFactorAdjustments = { ...learningSnapshot.factorAdjustments };
+  if (winnerEntry) {
+    const averages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
+      const total = learningEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
+      acc[key] = learningEntries.length > 0 ? total / learningEntries.length : 0.5;
+      return acc;
+    }, {
+      courseForm: 0.5,
+      formDistance: 0.5,
+      jockeyTrainer: 0.5,
+      oddsMovement: 0.5,
+      history: 0.5,
+      fieldStrength: 0.5,
+      weightCarried: 0.5,
+      surfaceFit: 0.5,
+      paceProfile: 0.5,
+      priceValue: 0.5,
+    });
+
+    for (const key of FACTOR_KEYS) {
+      const winnerValue = (winnerEntry.factors as PredictionFactorBreakdown)[key] ?? 0.5;
+      const baselineValue = topPickCorrect
+        ? averages[key]
+        : (topPick.factors as PredictionFactorBreakdown | undefined)?.[key] ?? averages[key];
+      const signal = clamp(winnerValue - baselineValue, -1, 1) * 0.08;
+      nextAdjustments[key] = round(clamp(roundMovingAverage(learningSnapshot.factorAdjustments[key], sampleSize, signal), -0.18, 0.18));
+    }
+  }
+
+  return {
+    topPickCorrect,
+    snapshot: {
+      sampleSize: sampleSize + 1,
+      topPickWinRate: roundMovingAverage(learningSnapshot.topPickWinRate, sampleSize, topPickCorrect ? 1 : 0),
+      placedRate: roundMovingAverage(learningSnapshot.placedRate, sampleSize, topPickPlaced ? 1 : 0),
+      averageConfidence: roundMovingAverage(learningSnapshot.averageConfidence, sampleSize, topPickConfidence),
+      confidenceBias: roundMovingAverage(learningSnapshot.confidenceBias, sampleSize, (topPickCorrect ? 1 : 0) - topPickConfidence),
+      factorAdjustments: nextAdjustments,
+    },
+  };
+}
+
+export async function rebuildLearningFeedbackFromHistory(): Promise<{ applied: number; skipped: number }> {
+  const learning = await ensureLearningFeedback();
+  const results = await db
+    .select()
+    .from(raceResultsTable)
+    .orderBy(raceResultsTable.officialAt, raceResultsTable.id);
+
+  let snapshot = buildLearningSnapshot({
+    ...learning,
+    sampleSize: 0,
+    topPickWinRate: 0,
+    placedRate: 0,
+    averageConfidence: 0,
+    confidenceBias: 0,
+    factorAdjustments: { ...DEFAULT_FACTOR_ADJUSTMENTS },
+  });
+  let lastResultRaceId: number | null = null;
+  let applied = 0;
+  let skipped = 0;
+
+  for (const result of results) {
+    const finishMap = new Map<number, number>([[result.winnerHorseId, 1]]);
+    if (result.runnerUpHorseId) finishMap.set(result.runnerUpHorseId, 2);
+    if (result.thirdHorseId) finishMap.set(result.thirdHorseId, 3);
+
+    const [latestSnapshot] = await db
+      .select()
+      .from(forecastSnapshotsTable)
+      .where(eq(forecastSnapshotsTable.raceId, result.raceId))
+      .orderBy(desc(forecastSnapshotsTable.createdAt))
+      .limit(1);
+
+    const snapshotEntries = latestSnapshot
+      ? await db
+          .select()
+          .from(forecastEntriesTable)
+          .where(eq(forecastEntriesTable.snapshotId, latestSnapshot.id))
+          .orderBy(forecastEntriesTable.rank)
+      : [];
+
+    const learningEntries = snapshotEntries.length > 0
+      ? snapshotEntries
+      : await db
+          .select()
+          .from(predictionsTable)
+          .where(eq(predictionsTable.raceId, result.raceId))
+          .orderBy(predictionsTable.rank);
+
+    const computed = computeUpdatedLearningSummary(snapshot, learningEntries, finishMap);
+    if (!computed) {
+      skipped++;
+      continue;
+    }
+
+    snapshot = computed.snapshot;
+    lastResultRaceId = result.raceId;
+    applied++;
+  }
+
+  await db
+    .update(learningFeedbackTable)
+    .set({
+      sampleSize: snapshot.sampleSize,
+      topPickWinRate: snapshot.topPickWinRate,
+      placedRate: snapshot.placedRate,
+      averageConfidence: snapshot.averageConfidence,
+      confidenceBias: snapshot.confidenceBias,
+      factorAdjustments: snapshot.factorAdjustments,
+      lastResultRaceId,
+      updatedAt: new Date(),
+    })
+    .where(eq(learningFeedbackTable.id, learning.id));
+
+  logger.info({ applied, skipped, lastResultRaceId }, "Rebuilt learning feedback summary from historical race results");
+  return { applied, skipped };
+}
+
 export async function recordRaceResult(
   raceId: number,
   input: RaceResultInput,
@@ -803,54 +940,28 @@ export async function recordRaceResult(
 
   const learning = await ensureLearningFeedback();
   const learningSnapshot = buildLearningSnapshot(learning);
-  const sampleSize = learning.sampleSize;
-  const topPickCorrect = topPick?.horseId === input.winnerHorseId;
-  const topPickPlaced = topPick ? (finishMap.get(topPick.horseId) ?? 99) <= 3 : false;
-  const topPickConfidence = topPick?.confidence ?? 0.5;
-  const winnerEntry = learningEntries.find((entry) => entry.horseId === input.winnerHorseId);
-
-  const nextAdjustments: LearningFactorAdjustments = { ...learningSnapshot.factorAdjustments };
-  if (winnerEntry) {
-    const averages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
-      const total = learningEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
-      acc[key] = learningEntries.length > 0 ? total / learningEntries.length : 0.5;
-      return acc;
-    }, {
-      courseForm: 0.5,
-      formDistance: 0.5,
-      jockeyTrainer: 0.5,
-      oddsMovement: 0.5,
-      history: 0.5,
-      fieldStrength: 0.5,
-      weightCarried: 0.5,
-      surfaceFit: 0.5,
-      paceProfile: 0.5,
-      priceValue: 0.5,
-    });
-
-    for (const key of FACTOR_KEYS) {
-      const winnerValue = (winnerEntry.factors as PredictionFactorBreakdown)[key] ?? 0.5;
-      const baselineValue = topPickCorrect
-        ? averages[key]
-        : (topPick?.factors as PredictionFactorBreakdown | undefined)?.[key] ?? averages[key];
-      const signal = clamp(winnerValue - baselineValue, -1, 1) * 0.08;
-      nextAdjustments[key] = round(clamp(roundMovingAverage(learningSnapshot.factorAdjustments[key], sampleSize, signal), -0.18, 0.18));
-    }
+  const computed = computeUpdatedLearningSummary(learningSnapshot, learningEntries, finishMap);
+  if (!computed) {
+    logger.info(
+      { raceId, currentPredictionCount: currentPredictions.length, snapshotEntryCount: snapshotEntries.length },
+      "Skipping learning feedback update because no forecast sample was available for the recorded result",
+    );
+    return { winnerHorseId: input.winnerHorseId, topPickCorrect: false };
   }
 
   await db
     .update(learningFeedbackTable)
     .set({
-      sampleSize: sampleSize + 1,
-      topPickWinRate: roundMovingAverage(learning.topPickWinRate, sampleSize, topPickCorrect ? 1 : 0),
-      placedRate: roundMovingAverage(learning.placedRate, sampleSize, topPickPlaced ? 1 : 0),
-      averageConfidence: roundMovingAverage(learning.averageConfidence, sampleSize, topPickConfidence),
-      confidenceBias: roundMovingAverage(learning.confidenceBias, sampleSize, (topPickCorrect ? 1 : 0) - topPickConfidence),
-      factorAdjustments: nextAdjustments,
+      sampleSize: computed.snapshot.sampleSize,
+      topPickWinRate: computed.snapshot.topPickWinRate,
+      placedRate: computed.snapshot.placedRate,
+      averageConfidence: computed.snapshot.averageConfidence,
+      confidenceBias: computed.snapshot.confidenceBias,
+      factorAdjustments: computed.snapshot.factorAdjustments,
       lastResultRaceId: raceId,
       updatedAt: now,
     })
     .where(eq(learningFeedbackTable.id, learning.id));
 
-  return { winnerHorseId: input.winnerHorseId, topPickCorrect };
+  return { winnerHorseId: input.winnerHorseId, topPickCorrect: computed.topPickCorrect };
 }

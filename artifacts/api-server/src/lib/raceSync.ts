@@ -35,7 +35,7 @@ import {
   type RaceSyncSource,
 } from "./theracingapi";
 import { getNextUpdateTime } from "./scheduler";
-import { recordRaceResult, runRaceForecast } from "./forecasting";
+import { rebuildLearningFeedbackFromHistory, recordRaceResult, runRaceForecast } from "./forecasting";
 import { addDaysToDateKey } from "./race-time";
 
 function numberFrom(value?: string | null): number | null {
@@ -52,6 +52,17 @@ function intFrom(value?: string | null): number | null {
 
 function normalizeVenueKey(value: string): string {
   return value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isSyntheticToteVenue(venue: string): boolean {
+  const normalized = normalizeVenueKey(venue);
+  return normalized.includes("quickmix")
+    || normalized.includes("mixed bi express")
+    || normalized.includes("mixed pa p6 blitz");
+}
+
+function shouldIgnoreToteCard(card: NormalizedRaceCard): boolean {
+  return card.source === "tote" && isSyntheticToteVenue(card.venue);
 }
 
 function mergeTextParts(...values: Array<string | null | undefined>): string | null {
@@ -512,7 +523,15 @@ async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourc
     }
   }
 
-  return { source: "tote", cards, meetingsFound: programs.length };
+  const filteredCards = cards.filter((card) => !shouldIgnoreToteCard(card));
+  if (filteredCards.length !== cards.length) {
+    logger.warn(
+      { dateKey, ignoredSyntheticCardCount: cards.length - filteredCards.length },
+      "Ignoring synthetic Tote pool cards during race sync",
+    );
+  }
+
+  return { source: "tote", cards: filteredCards, meetingsFound: countMeetings(filteredCards) };
 }
 
 async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
@@ -686,6 +705,56 @@ export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCre
   return { racesCreated, meetingsFound };
 }
 
+async function purgeSyntheticToteRaces(): Promise<number> {
+  const toteRaces = await db
+    .select({ id: racesTable.id, venue: racesTable.venue })
+    .from(racesTable)
+    .where(eq(racesTable.syncedFrom, "tote"));
+
+  const syntheticRaceIds = toteRaces.filter((race) => isSyntheticToteVenue(race.venue)).map((race) => race.id);
+  for (const raceId of syntheticRaceIds) {
+    await db.delete(racesTable).where(eq(racesTable.id, raceId));
+  }
+
+  if (syntheticRaceIds.length > 0) {
+    logger.warn({ purgedSyntheticRaceCount: syntheticRaceIds.length }, "Purged synthetic Tote pool races from stored schedule");
+  }
+
+  return syntheticRaceIds.length;
+}
+
+async function purgeStalePendingRaces(cutoffDateKey: string): Promise<number> {
+  const races = await db
+    .select({ id: racesTable.id, meetingDate: racesTable.meetingDate, status: racesTable.status, venue: racesTable.venue, raceNumber: racesTable.raceNumber })
+    .from(racesTable);
+
+  let purged = 0;
+  let restoredCompleted = 0;
+  for (const race of races) {
+    if (!race.meetingDate || race.meetingDate >= cutoffDateKey) continue;
+    if (race.status !== "upcoming" && race.status !== "analyzing") continue;
+
+    const [result] = await db.select({ id: raceResultsTable.id }).from(raceResultsTable).where(eq(raceResultsTable.raceId, race.id)).limit(1);
+    if (result) {
+      await db.update(racesTable).set({ status: "completed", nextUpdateAt: null }).where(eq(racesTable.id, race.id));
+      restoredCompleted++;
+      continue;
+    }
+
+    await db.delete(racesTable).where(eq(racesTable.id, race.id));
+    purged++;
+  }
+
+  if (purged > 0 || restoredCompleted > 0) {
+    logger.warn(
+      { purgedStalePendingRaceCount: purged, restoredCompletedRaceCount: restoredCompleted, cutoffDateKey },
+      "Purged stale past-dated races that were still marked upcoming/analyzing",
+    );
+  }
+
+  return purged + restoredCompleted;
+}
+
 export async function syncTodaysMeetings(): Promise<void> {
   const dateStr = await resolveGallopTodayDateKey();
 
@@ -695,6 +764,12 @@ export async function syncTodaysMeetings(): Promise<void> {
   );
 
   try {
+    const purgedSyntheticRaceCount = await purgeSyntheticToteRaces();
+    const purgedStalePendingRaceCount = await purgeStalePendingRaces(dateStr);
+    if (purgedSyntheticRaceCount > 0) {
+      await rebuildLearningFeedbackFromHistory();
+    }
+
     const result = await syncUpcomingMeetings(7);
 
     await db.insert(syncStateTable).values({
@@ -704,7 +779,7 @@ export async function syncTodaysMeetings(): Promise<void> {
       status: "ok",
     });
 
-    logger.info(result, "Weekly race sync complete");
+    logger.info({ ...result, purgedSyntheticRaceCount, purgedStalePendingRaceCount }, "Weekly race sync complete");
   } catch (err) {
     logger.error({ err }, "Weekly race sync failed");
     await db.insert(syncStateTable).values({
