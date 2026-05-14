@@ -109,6 +109,11 @@ export type GallopFixtureSnapshot = {
   entries: GallopFixtureItem[];
 };
 
+export type GallopRacecardFetchResult = {
+  cards: NormalizedRaceCard[];
+  listedMeetings: number;
+};
+
 const source: RaceSyncSource = "gallop";
 
 function compactDateKey(dateKey: string): string {
@@ -343,11 +348,20 @@ export async function resolveGallopTodayDateKey(): Promise<string> {
   }
 }
 
-export async function fetchGallopRacecardsByDate(dateKey: string): Promise<NormalizedRaceCard[]> {
+export async function fetchGallopRacecardsByDate(dateKey: string): Promise<GallopRacecardFetchResult> {
   const snapshot = await fetchGallopFixtureSnapshot();
   const requestedDate = compactDateKey(dateKey);
-  const meetings = snapshot.racecards.filter((item) => item.date === requestedDate);
-  if (meetings.length === 0) return [];
+  const meetingMap = new Map<string, GallopFixtureItem>();
+  for (const item of [...snapshot.racecards, ...snapshot.results, ...snapshot.entries]) {
+    if (item.date !== requestedDate) continue;
+    const club = Number(item.club ?? 0);
+    if (!Number.isFinite(club) || club <= 0) continue;
+    const key = `${requestedDate}:${club}`;
+    if (!meetingMap.has(key)) meetingMap.set(key, item);
+  }
+
+  const meetings = [...meetingMap.values()];
+  if (meetings.length === 0) return { cards: [], listedMeetings: 0 };
 
   const cards: NormalizedRaceCard[] = [];
 
@@ -400,5 +414,8 @@ export async function fetchGallopRacecardsByDate(dateKey: string): Promise<Norma
     }
   }
 
-  return cards.sort((left, right) => left.meetingDate.localeCompare(right.meetingDate) || left.raceTime.localeCompare(right.raceTime) || left.raceNumber - right.raceNumber);
+  return {
+    cards: cards.sort((left, right) => left.meetingDate.localeCompare(right.meetingDate) || left.raceTime.localeCompare(right.raceTime) || left.raceNumber - right.raceNumber),
+    listedMeetings: meetings.length,
+  };
 }

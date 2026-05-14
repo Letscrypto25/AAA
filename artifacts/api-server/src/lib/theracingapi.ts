@@ -566,7 +566,8 @@ export async function fetchTheRacingApiRacecardsByDate(dateKey: string): Promise
       .filter((race): race is NormalizedRaceCard => race !== null);
   } catch (err) {
     const standardDay = getStandardDayParam(dateKey);
-    const canTryStandard = config.plan !== "pro" || (err instanceof TheRacingApiRequestError && err.status === 404);
+    const canTryStandard = config.plan !== "pro"
+      || (err instanceof TheRacingApiRequestError && [401, 403, 404].includes(err.status));
     if (!standardDay || !canTryStandard) throw err;
 
     logger.warn({ err, dateKey }, "Pro racecards request failed; retrying with standard endpoint");
