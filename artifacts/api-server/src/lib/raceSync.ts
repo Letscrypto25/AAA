@@ -2,6 +2,10 @@ import { db, racesTable, horsesTable, syncStateTable, predictionsTable, raceResu
 import { and, desc, eq } from "drizzle-orm";
 import { logger } from "./logger";
 import {
+  fetchGallopRacecardsByDate,
+  resolveGallopTodayDateKey,
+} from "./gallop-form";
+import {
   fetchProgramRaces,
   fetchProgramsByDate,
   formatRunnerForm,
@@ -32,11 +36,7 @@ import {
 } from "./theracingapi";
 import { getNextUpdateTime } from "./scheduler";
 import { recordRaceResult, runRaceForecast } from "./forecasting";
-import { addDaysToDateKey, getTodayDateKey } from "./race-time";
-
-function todayDateStr(): string {
-  return getTodayDateKey();
-}
+import { addDaysToDateKey } from "./race-time";
 
 function numberFrom(value?: string | null): number | null {
   if (!value) return null;
@@ -52,6 +52,84 @@ function intFrom(value?: string | null): number | null {
 
 function normalizeVenueKey(value: string): string {
   return value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function mergeTextParts(...values: Array<string | null | undefined>): string | null {
+  const items = values
+    .flatMap((value) => (value || "").split("|").map((part) => part.trim()))
+    .filter(Boolean);
+
+  return items.length > 0 ? [...new Set(items)].join(" | ") : null;
+}
+
+function normalizeRunnerName(value: string): string {
+  return normalizeVenueKey(value).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function findMatchingRunner(card: NormalizedRaceCard, runner: NormalizedRunner): NormalizedRunner | null {
+  const byNumber = card.runners.find((candidate) => candidate.number === runner.number);
+  if (byNumber) return byNumber;
+
+  const runnerName = normalizeRunnerName(runner.name);
+  if (!runnerName) return null;
+  return card.runners.find((candidate) => normalizeRunnerName(candidate.name) === runnerName) ?? null;
+}
+
+function mergeRunnerDetail(primary: NormalizedRunner, detail: NormalizedRunner): NormalizedRunner {
+  return {
+    number: primary.number,
+    name: detail.name || primary.name,
+    jockey: detail.jockey || primary.jockey,
+    trainer: detail.trainer || primary.trainer,
+    form: detail.form || primary.form,
+    weight: detail.weight ?? primary.weight,
+    currentOdds: detail.currentOdds ?? primary.currentOdds,
+    openingOdds: detail.openingOdds ?? primary.openingOdds,
+    scratched: detail.scratched || primary.scratched,
+    scratchReason: detail.scratchReason ?? primary.scratchReason,
+    courseRecord: detail.courseRecord || primary.courseRecord,
+    distanceRecord: detail.distanceRecord || primary.distanceRecord,
+    trainerJockeyRecord: mergeTextParts(primary.trainerJockeyRecord, detail.trainerJockeyRecord) ?? "",
+    notes: mergeTextParts(primary.notes, detail.notes),
+  };
+}
+
+function mergeRaceCardDetail(primary: NormalizedRaceCard, detail: NormalizedRaceCard): NormalizedRaceCard {
+  const mergedRunners: NormalizedRunner[] = [];
+  const matchedNumbers = new Set<number>();
+
+  for (const runner of primary.runners) {
+    const match = findMatchingRunner(detail, runner);
+    if (!match) {
+      mergedRunners.push(runner);
+      continue;
+    }
+
+    matchedNumbers.add(match.number);
+    mergedRunners.push(mergeRunnerDetail(runner, match));
+  }
+
+  for (const runner of detail.runners) {
+    if (matchedNumbers.has(runner.number)) continue;
+    mergedRunners.push(runner);
+  }
+
+  return {
+    source: primary.source,
+    sourceRaceId: detail.sourceRaceId ?? primary.sourceRaceId,
+    meetingDate: primary.meetingDate,
+    venue: primary.venue,
+    raceNumber: primary.raceNumber,
+    name: primary.name || detail.name,
+    distance: primary.distance > 0 ? primary.distance : detail.distance,
+    raceTime: primary.raceTime !== "00:00" ? primary.raceTime : detail.raceTime,
+    surface: primary.surface || detail.surface,
+    grade: primary.grade ?? detail.grade,
+    prize: primary.prize ?? detail.prize,
+    status: primary.status === "cancelled" ? "cancelled" : detail.status === "completed" ? "completed" : primary.status,
+    runners: mergedRunners.sort((left, right) => left.number - right.number),
+    result: detail.result ?? primary.result,
+  };
 }
 
 function buildTrainerJockeyRecord(runner: ToteRunner): string {
@@ -324,7 +402,7 @@ async function syncRaceHorses(raceId: number, card: NormalizedRaceCard): Promise
       .update(horsesTable)
       .set({
         scratched: true,
-        scratchReason: `Missing from latest ${card.source === "theracingapi" ? "The Racing API" : "Tote"} card`,
+        scratchReason: `Missing from latest ${card.source === "theracingapi" ? "The Racing API" : card.source === "gallop" ? "Gallop" : "Tote"} card`,
       })
       .where(eq(horsesTable.id, horse.id));
   }
@@ -438,6 +516,45 @@ async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourc
 }
 
 async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
+  try {
+    const gallopCards = await fetchGallopRacecardsByDate(dateKey);
+    if (gallopCards.length > 0) {
+      let mergedCards = gallopCards;
+
+      if (isTheRacingApiConfigured()) {
+        try {
+          const cards = await fetchTheRacingApiRacecardsByDate(dateKey);
+          let resultMap = new Map<string, NormalizedRaceResult>();
+          try {
+            resultMap = await fetchTheRacingApiResultsByDate(dateKey);
+          } catch (err) {
+            logger.warn({ err, dateKey }, "The Racing API results fetch failed during Gallop merge");
+          }
+
+          const detailedCards = cards.map((card) => {
+            if (!card.sourceRaceId) return card;
+            return mergeResultIntoRacecard(card, resultMap.get(card.sourceRaceId));
+          });
+
+          mergedCards = gallopCards.map((card) => {
+            const detailMatch = findMatchingRaceCard(detailedCards, card);
+            return detailMatch ? mergeRaceCardDetail(card, detailMatch) : card;
+          });
+        } catch (err) {
+          logger.warn({ err, dateKey }, "The Racing API merge failed; keeping Gallop racecards");
+        }
+      }
+
+      return {
+        source: "gallop",
+        cards: mergedCards,
+        meetingsFound: countMeetings(mergedCards),
+      };
+    }
+  } catch (err) {
+    logger.warn({ err, dateKey }, "Gallop racecard sync failed; falling back to The Racing API or Tote");
+  }
+
   if (!isTheRacingApiConfigured()) {
     return fetchToteRaceCardsForDate(dateKey);
   }
@@ -492,6 +609,22 @@ function findMatchingCard(cards: NormalizedRaceCard[], race: typeof racesTable.$
   return cards.find((card) => cardMatchesRace(card, race)) ?? null;
 }
 
+function findMatchingRaceCard(cards: NormalizedRaceCard[], race: Pick<NormalizedRaceCard, "meetingDate" | "raceNumber" | "venue" | "raceTime">): NormalizedRaceCard | null {
+  const exactVenueMatch = cards.find((card) => (
+    card.meetingDate === race.meetingDate
+    && card.raceNumber === race.raceNumber
+    && normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue)
+    && (card.raceTime === race.raceTime || card.raceTime === "00:00" || race.raceTime === "00:00")
+  ));
+  if (exactVenueMatch) return exactVenueMatch;
+
+  return cards.find((card) => (
+    card.meetingDate === race.meetingDate
+    && card.raceNumber === race.raceNumber
+    && (normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue) || card.raceTime === race.raceTime)
+  )) ?? null;
+}
+
 async function enrichTheracingRacecard(card: NormalizedRaceCard): Promise<NormalizedRaceCard> {
   if (card.source !== "theracingapi" || !card.sourceRaceId) return card;
 
@@ -537,7 +670,7 @@ export async function syncMeetingsForDate(dateKey: string): Promise<{ racesCreat
 export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCreated: number; meetingsFound: number }> {
   let racesCreated = 0;
   let meetingsFound = 0;
-  const startDateKey = getTodayDateKey();
+  const startDateKey = await resolveGallopTodayDateKey();
 
   for (let offset = 0; offset < days; offset++) {
     const dateKey = addDaysToDateKey(startDateKey, offset);
@@ -550,10 +683,10 @@ export async function syncUpcomingMeetings(days: number = 7): Promise<{ racesCre
 }
 
 export async function syncTodaysMeetings(): Promise<void> {
-  const dateStr = todayDateStr();
+  const dateStr = await resolveGallopTodayDateKey();
 
   logger.info(
-    { date: dateStr, primarySource: isTheRacingApiConfigured() ? "theracingapi" : "tote" },
+    { date: dateStr, primarySource: isTheRacingApiConfigured() ? "gallop+theracingapi" : "gallop+tote" },
     "Starting weekly race sync",
   );
 
@@ -598,7 +731,21 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
     return;
   }
 
-  const cardToSync = matchedCard.source === "theracingapi" ? await enrichTheracingRacecard(matchedCard) : matchedCard;
+  let cardToSync = matchedCard.source === "theracingapi" ? await enrichTheracingRacecard(matchedCard) : matchedCard;
+
+  if (matchedCard.source === "gallop" && isTheRacingApiConfigured()) {
+    try {
+      const detailCards = await fetchTheRacingApiRacecardsByDate(race.meetingDate);
+      const detailMatch = findMatchingCard(detailCards, race);
+      if (detailMatch) {
+        const enriched = await enrichTheracingRacecard(detailMatch);
+        cardToSync = mergeRaceCardDetail(matchedCard, enriched);
+      }
+    } catch (err) {
+      logger.warn({ err, raceId, venue: race.venue, raceNumber: race.raceNumber }, "The Racing API refresh merge failed for Gallop card");
+    }
+  }
+
   await syncRaceCard(cardToSync, raceId);
   logger.info(
     { raceId, venue: race.venue, raceNumber: race.raceNumber, source: cardToSync.source },

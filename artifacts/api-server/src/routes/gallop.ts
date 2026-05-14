@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { resolveGallopTodayDateKey } from "../lib/gallop-form";
 
 const router = Router();
 
@@ -77,7 +78,7 @@ router.get("/gallop/venues", async (req, res): Promise<void> => {
 
     const reports = data?.data?.getStripeReports ?? [];
 
-    const today = new Date().toISOString().split("T")[0];
+    const today = (await resolveGallopTodayDateKey()).replace(/-/g, "");
     const upcoming = reports.filter((r) => r.date >= today).slice(0, 10);
     const recent = reports.filter((r) => r.date < today).slice(0, 20);
 
