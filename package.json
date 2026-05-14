@@ -4,16 +4,17 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "node -e \"const fs = require('fs'); ['package-lock.json', 'yarn.lock'].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f) }); if (!process.env.npm_config_user_agent || !process.env.npm_config_user_agent.startsWith('pnpm/')) { console.error('Use pnpm instead'); process.exit(1); }\"",
-    "dev": "pnpm --parallel --filter @workspace/api-server --filter @workspace/aaa-bets run dev",
-    "dev:api": "pnpm --filter @workspace/api-server run dev",
-    "dev:web": "pnpm --filter @workspace/aaa-bets run dev",
-    "start": "pnpm --filter @workspace/api-server run start",
-    "railway:build": "pnpm build",
-    "railway:start": "pnpm start",
-    "codegen": "pnpm --filter @workspace/api-spec run codegen",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "pnpm": "corepack pnpm",
+    "dev": "corepack pnpm --parallel --filter @workspace/api-server --filter @workspace/aaa-bets run dev",
+    "dev:api": "corepack pnpm --filter @workspace/api-server run dev",
+    "dev:web": "corepack pnpm --filter @workspace/aaa-bets run dev",
+    "start": "corepack pnpm --filter @workspace/api-server run start",
+    "railway:build": "corepack pnpm build",
+    "railway:start": "corepack pnpm start",
+    "codegen": "corepack pnpm --filter @workspace/api-spec run codegen",
+    "build": "corepack pnpm run typecheck && corepack pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "corepack pnpm run typecheck:libs && corepack pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
   "engines": {
