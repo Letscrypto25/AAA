@@ -8,6 +8,11 @@ export type PredictionFactorBreakdown = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
   overall: number;
 };
 
@@ -17,6 +22,11 @@ export type PredictionWeightConfig = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 };
 
 export type LearningFactorAdjustments = {
@@ -25,6 +35,11 @@ export type LearningFactorAdjustments = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 };
 
 export type LearningSummarySnapshot = {
@@ -133,11 +148,16 @@ export const forecastEntriesTable = pgTable("forecast_entries", {
 
 export const predictionWeightsTable = pgTable("prediction_weights", {
   id: serial("id").primaryKey(),
-  courseForm: real("course_form").notNull().default(0.25),
-  formDistance: real("form_distance").notNull().default(0.25),
-  jockeyTrainer: real("jockey_trainer").notNull().default(0.20),
-  oddsMovement: real("odds_movement").notNull().default(0.15),
-  history: real("history").notNull().default(0.15),
+  courseForm: real("course_form").notNull().default(0.18),
+  formDistance: real("form_distance").notNull().default(0.18),
+  jockeyTrainer: real("jockey_trainer").notNull().default(0.14),
+  oddsMovement: real("odds_movement").notNull().default(0.10),
+  history: real("history").notNull().default(0.10),
+  fieldStrength: real("field_strength").notNull().default(0.08),
+  weightCarried: real("weight_carried").notNull().default(0.07),
+  surfaceFit: real("surface_fit").notNull().default(0.06),
+  paceProfile: real("pace_profile").notNull().default(0.05),
+  priceValue: real("price_value").notNull().default(0.04),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
@@ -166,6 +186,11 @@ export const learningFeedbackTable = pgTable("learning_feedback", {
     jockeyTrainer: 0,
     oddsMovement: 0,
     history: 0,
+    fieldStrength: 0,
+    weightCarried: 0,
+    surfaceFit: 0,
+    paceProfile: 0,
+    priceValue: 0,
   }),
   lastResultRaceId: integer("last_result_race_id").references(() => racesTable.id, { onDelete: "set null" }),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

@@ -37,7 +37,6 @@ import type {
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -67,7 +66,7 @@ export const getHealthCheckQueryKey = () => {
 
 export const getHealthCheckQueryOptions = <
   TData = Awaited<ReturnType<typeof healthCheck>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof healthCheck>>,
@@ -94,7 +93,7 @@ export const getHealthCheckQueryOptions = <
 export type HealthCheckQueryResult = NonNullable<
   Awaited<ReturnType<typeof healthCheck>>
 >;
-export type HealthCheckQueryError = ErrorType<unknown>;
+export type HealthCheckQueryError = unknown;
 
 /**
  * @summary Health check
@@ -102,7 +101,7 @@ export type HealthCheckQueryError = ErrorType<unknown>;
 
 export function useHealthCheck<
   TData = Awaited<ReturnType<typeof healthCheck>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof healthCheck>>,
@@ -121,7 +120,7 @@ export function useHealthCheck<
 }
 
 /**
- * @summary Get today's races
+ * @summary Get races with weekly forecast context
  */
 export const getGetRacesUrl = (params?: GetRacesParams) => {
   const normalizedParams = new URLSearchParams();
@@ -155,7 +154,7 @@ export const getGetRacesQueryKey = (params?: GetRacesParams) => {
 
 export const getGetRacesQueryOptions = <
   TData = Awaited<ReturnType<typeof getRaces>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   params?: GetRacesParams,
   options?: {
@@ -185,15 +184,15 @@ export const getGetRacesQueryOptions = <
 export type GetRacesQueryResult = NonNullable<
   Awaited<ReturnType<typeof getRaces>>
 >;
-export type GetRacesQueryError = ErrorType<unknown>;
+export type GetRacesQueryError = unknown;
 
 /**
- * @summary Get today's races
+ * @summary Get races with weekly forecast context
  */
 
 export function useGetRaces<
   TData = Awaited<ReturnType<typeof getRaces>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   params?: GetRacesParams,
   options?: {
@@ -215,7 +214,7 @@ export function useGetRaces<
 }
 
 /**
- * @summary Create a race (manual entry)
+ * @summary Create a race
  */
 export const getCreateRaceUrl = () => {
   return `/api/races`;
@@ -234,20 +233,20 @@ export const createRace = async (
 };
 
 export const getCreateRaceMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof createRace>>,
     TError,
-    { data: BodyType<CreateRaceBody> },
+    { data: CreateRaceBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof createRace>>,
   TError,
-  { data: BodyType<CreateRaceBody> },
+  { data: CreateRaceBody },
   TContext
 > => {
   const mutationKey = ["createRace"];
@@ -261,7 +260,7 @@ export const getCreateRaceMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof createRace>>,
-    { data: BodyType<CreateRaceBody> }
+    { data: CreateRaceBody }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -274,27 +273,24 @@ export const getCreateRaceMutationOptions = <
 export type CreateRaceMutationResult = NonNullable<
   Awaited<ReturnType<typeof createRace>>
 >;
-export type CreateRaceMutationBody = BodyType<CreateRaceBody>;
-export type CreateRaceMutationError = ErrorType<unknown>;
+export type CreateRaceMutationBody = CreateRaceBody;
+export type CreateRaceMutationError = unknown;
 
 /**
- * @summary Create a race (manual entry)
+ * @summary Create a race
  */
-export const useCreateRace = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
+export const useCreateRace = <TError = unknown, TContext = unknown>(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof createRace>>,
     TError,
-    { data: BodyType<CreateRaceBody> },
+    { data: CreateRaceBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof createRace>>,
   TError,
-  { data: BodyType<CreateRaceBody> },
+  { data: CreateRaceBody },
   TContext
 > => {
   return useMutation(getCreateRaceMutationOptions(options));
@@ -323,7 +319,7 @@ export const getGetRaceQueryKey = (raceId: number) => {
 
 export const getGetRaceQueryOptions = <
   TData = Awaited<ReturnType<typeof getRace>>,
-  TError = ErrorType<void>,
+  TError = void,
 >(
   raceId: number,
   options?: {
@@ -352,7 +348,7 @@ export const getGetRaceQueryOptions = <
 export type GetRaceQueryResult = NonNullable<
   Awaited<ReturnType<typeof getRace>>
 >;
-export type GetRaceQueryError = ErrorType<void>;
+export type GetRaceQueryError = void;
 
 /**
  * @summary Get race by ID
@@ -360,7 +356,7 @@ export type GetRaceQueryError = ErrorType<void>;
 
 export function useGetRace<
   TData = Awaited<ReturnType<typeof getRace>>,
-  TError = ErrorType<void>,
+  TError = void,
 >(
   raceId: number,
   options?: {
@@ -400,7 +396,7 @@ export const getGetRaceHorsesQueryKey = (raceId: number) => {
 
 export const getGetRaceHorsesQueryOptions = <
   TData = Awaited<ReturnType<typeof getRaceHorses>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   raceId: number,
   options?: {
@@ -435,7 +431,7 @@ export const getGetRaceHorsesQueryOptions = <
 export type GetRaceHorsesQueryResult = NonNullable<
   Awaited<ReturnType<typeof getRaceHorses>>
 >;
-export type GetRaceHorsesQueryError = ErrorType<unknown>;
+export type GetRaceHorsesQueryError = unknown;
 
 /**
  * @summary Get horses in a race
@@ -443,7 +439,7 @@ export type GetRaceHorsesQueryError = ErrorType<unknown>;
 
 export function useGetRaceHorses<
   TData = Awaited<ReturnType<typeof getRaceHorses>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   raceId: number,
   options?: {
@@ -485,20 +481,20 @@ export const addHorse = async (
 };
 
 export const getAddHorseMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof addHorse>>,
     TError,
-    { raceId: number; data: BodyType<CreateHorseBody> },
+    { raceId: number; data: CreateHorseBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof addHorse>>,
   TError,
-  { raceId: number; data: BodyType<CreateHorseBody> },
+  { raceId: number; data: CreateHorseBody },
   TContext
 > => {
   const mutationKey = ["addHorse"];
@@ -512,7 +508,7 @@ export const getAddHorseMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof addHorse>>,
-    { raceId: number; data: BodyType<CreateHorseBody> }
+    { raceId: number; data: CreateHorseBody }
   > = (props) => {
     const { raceId, data } = props ?? {};
 
@@ -525,34 +521,31 @@ export const getAddHorseMutationOptions = <
 export type AddHorseMutationResult = NonNullable<
   Awaited<ReturnType<typeof addHorse>>
 >;
-export type AddHorseMutationBody = BodyType<CreateHorseBody>;
-export type AddHorseMutationError = ErrorType<unknown>;
+export type AddHorseMutationBody = CreateHorseBody;
+export type AddHorseMutationError = unknown;
 
 /**
  * @summary Add a horse to a race
  */
-export const useAddHorse = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
+export const useAddHorse = <TError = unknown, TContext = unknown>(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof addHorse>>,
     TError,
-    { raceId: number; data: BodyType<CreateHorseBody> },
+    { raceId: number; data: CreateHorseBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof addHorse>>,
   TError,
-  { raceId: number; data: BodyType<CreateHorseBody> },
+  { raceId: number; data: CreateHorseBody },
   TContext
 > => {
   return useMutation(getAddHorseMutationOptions(options));
 };
 
 /**
- * @summary Get predictions for a race
+ * @summary Get persisted predictions for a race
  */
 export const getGetRacePredictionsUrl = (raceId: number) => {
   return `/api/races/${raceId}/predictions`;
@@ -574,7 +567,7 @@ export const getGetRacePredictionsQueryKey = (raceId: number) => {
 
 export const getGetRacePredictionsQueryOptions = <
   TData = Awaited<ReturnType<typeof getRacePredictions>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   raceId: number,
   options?: {
@@ -610,15 +603,15 @@ export const getGetRacePredictionsQueryOptions = <
 export type GetRacePredictionsQueryResult = NonNullable<
   Awaited<ReturnType<typeof getRacePredictions>>
 >;
-export type GetRacePredictionsQueryError = ErrorType<unknown>;
+export type GetRacePredictionsQueryError = unknown;
 
 /**
- * @summary Get predictions for a race
+ * @summary Get persisted predictions for a race
  */
 
 export function useGetRacePredictions<
   TData = Awaited<ReturnType<typeof getRacePredictions>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(
   raceId: number,
   options?: {
@@ -640,7 +633,7 @@ export function useGetRacePredictions<
 }
 
 /**
- * @summary Trigger AI analysis for a race
+ * @summary Trigger forecast generation for a race
  */
 export const getAnalyzeRaceUrl = (raceId: number) => {
   return `/api/races/${raceId}/analyze`;
@@ -657,7 +650,7 @@ export const analyzeRace = async (
 };
 
 export const getAnalyzeRaceMutationOptions = <
-  TError = ErrorType<void>,
+  TError = void,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
@@ -698,15 +691,12 @@ export type AnalyzeRaceMutationResult = NonNullable<
   Awaited<ReturnType<typeof analyzeRace>>
 >;
 
-export type AnalyzeRaceMutationError = ErrorType<void>;
+export type AnalyzeRaceMutationError = void;
 
 /**
- * @summary Trigger AI analysis for a race
+ * @summary Trigger forecast generation for a race
  */
-export const useAnalyzeRace = <
-  TError = ErrorType<void>,
-  TContext = unknown,
->(options?: {
+export const useAnalyzeRace = <TError = void, TContext = unknown>(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof analyzeRace>>,
     TError,
@@ -744,20 +734,20 @@ export const recordRaceResult = async (
 };
 
 export const getRecordRaceResultMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof recordRaceResult>>,
     TError,
-    { raceId: number; data: BodyType<RecordRaceResultBody> },
+    { raceId: number; data: RecordRaceResultBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof recordRaceResult>>,
   TError,
-  { raceId: number; data: BodyType<RecordRaceResultBody> },
+  { raceId: number; data: RecordRaceResultBody },
   TContext
 > => {
   const mutationKey = ["recordRaceResult"];
@@ -771,7 +761,7 @@ export const getRecordRaceResultMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof recordRaceResult>>,
-    { raceId: number; data: BodyType<RecordRaceResultBody> }
+    { raceId: number; data: RecordRaceResultBody }
   > = (props) => {
     const { raceId, data } = props ?? {};
 
@@ -784,27 +774,27 @@ export const getRecordRaceResultMutationOptions = <
 export type RecordRaceResultMutationResult = NonNullable<
   Awaited<ReturnType<typeof recordRaceResult>>
 >;
-export type RecordRaceResultMutationBody = BodyType<RecordRaceResultBody>;
-export type RecordRaceResultMutationError = ErrorType<unknown>;
+export type RecordRaceResultMutationBody = RecordRaceResultBody;
+export type RecordRaceResultMutationError = unknown;
 
 /**
  * @summary Record an official result and grade the forecast
  */
 export const useRecordRaceResult = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof recordRaceResult>>,
     TError,
-    { raceId: number; data: BodyType<RecordRaceResultBody> },
+    { raceId: number; data: RecordRaceResultBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof recordRaceResult>>,
   TError,
-  { raceId: number; data: BodyType<RecordRaceResultBody> },
+  { raceId: number; data: RecordRaceResultBody },
   TContext
 > => {
   return useMutation(getRecordRaceResultMutationOptions(options));
@@ -832,7 +822,7 @@ export const getGetWeightsQueryKey = () => {
 
 export const getGetWeightsQueryOptions = <
   TData = Awaited<ReturnType<typeof getWeights>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getWeights>>,
@@ -859,7 +849,7 @@ export const getGetWeightsQueryOptions = <
 export type GetWeightsQueryResult = NonNullable<
   Awaited<ReturnType<typeof getWeights>>
 >;
-export type GetWeightsQueryError = ErrorType<unknown>;
+export type GetWeightsQueryError = unknown;
 
 /**
  * @summary Get current prediction weights
@@ -867,7 +857,7 @@ export type GetWeightsQueryError = ErrorType<unknown>;
 
 export function useGetWeights<
   TData = Awaited<ReturnType<typeof getWeights>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getWeights>>,
@@ -905,20 +895,20 @@ export const updateWeights = async (
 };
 
 export const getUpdateWeightsMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof updateWeights>>,
     TError,
-    { data: BodyType<UpdateWeightsBody> },
+    { data: UpdateWeightsBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof updateWeights>>,
   TError,
-  { data: BodyType<UpdateWeightsBody> },
+  { data: UpdateWeightsBody },
   TContext
 > => {
   const mutationKey = ["updateWeights"];
@@ -932,7 +922,7 @@ export const getUpdateWeightsMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof updateWeights>>,
-    { data: BodyType<UpdateWeightsBody> }
+    { data: UpdateWeightsBody }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -945,34 +935,34 @@ export const getUpdateWeightsMutationOptions = <
 export type UpdateWeightsMutationResult = NonNullable<
   Awaited<ReturnType<typeof updateWeights>>
 >;
-export type UpdateWeightsMutationBody = BodyType<UpdateWeightsBody>;
-export type UpdateWeightsMutationError = ErrorType<unknown>;
+export type UpdateWeightsMutationBody = UpdateWeightsBody;
+export type UpdateWeightsMutationError = unknown;
 
 /**
  * @summary Update prediction weights
  */
 export const useUpdateWeights = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof updateWeights>>,
     TError,
-    { data: BodyType<UpdateWeightsBody> },
+    { data: UpdateWeightsBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof updateWeights>>,
   TError,
-  { data: BodyType<UpdateWeightsBody> },
+  { data: UpdateWeightsBody },
   TContext
 > => {
   return useMutation(getUpdateWeightsMutationOptions(options));
 };
 
 /**
- * @summary Send a chat message to adjust predictions
+ * @summary Send a chat message to the analyst
  */
 export const getSendChatMessageUrl = () => {
   return `/api/chat`;
@@ -991,20 +981,20 @@ export const sendChatMessage = async (
 };
 
 export const getSendChatMessageMutationOptions = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof sendChatMessage>>,
     TError,
-    { data: BodyType<ChatMessageBody> },
+    { data: ChatMessageBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof sendChatMessage>>,
   TError,
-  { data: BodyType<ChatMessageBody> },
+  { data: ChatMessageBody },
   TContext
 > => {
   const mutationKey = ["sendChatMessage"];
@@ -1018,7 +1008,7 @@ export const getSendChatMessageMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof sendChatMessage>>,
-    { data: BodyType<ChatMessageBody> }
+    { data: ChatMessageBody }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -1031,27 +1021,27 @@ export const getSendChatMessageMutationOptions = <
 export type SendChatMessageMutationResult = NonNullable<
   Awaited<ReturnType<typeof sendChatMessage>>
 >;
-export type SendChatMessageMutationBody = BodyType<ChatMessageBody>;
-export type SendChatMessageMutationError = ErrorType<unknown>;
+export type SendChatMessageMutationBody = ChatMessageBody;
+export type SendChatMessageMutationError = unknown;
 
 /**
- * @summary Send a chat message to adjust predictions
+ * @summary Send a chat message to the analyst
  */
 export const useSendChatMessage = <
-  TError = ErrorType<unknown>,
+  TError = unknown,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof sendChatMessage>>,
     TError,
-    { data: BodyType<ChatMessageBody> },
+    { data: ChatMessageBody },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof sendChatMessage>>,
   TError,
-  { data: BodyType<ChatMessageBody> },
+  { data: ChatMessageBody },
   TContext
 > => {
   return useMutation(getSendChatMessageMutationOptions(options));
@@ -1079,7 +1069,7 @@ export const getGetChatHistoryQueryKey = () => {
 
 export const getGetChatHistoryQueryOptions = <
   TData = Awaited<ReturnType<typeof getChatHistory>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getChatHistory>>,
@@ -1106,7 +1096,7 @@ export const getGetChatHistoryQueryOptions = <
 export type GetChatHistoryQueryResult = NonNullable<
   Awaited<ReturnType<typeof getChatHistory>>
 >;
-export type GetChatHistoryQueryError = ErrorType<unknown>;
+export type GetChatHistoryQueryError = unknown;
 
 /**
  * @summary Get recent chat history
@@ -1114,7 +1104,7 @@ export type GetChatHistoryQueryError = ErrorType<unknown>;
 
 export function useGetChatHistory<
   TData = Awaited<ReturnType<typeof getChatHistory>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getChatHistory>>,
@@ -1133,7 +1123,7 @@ export function useGetChatHistory<
 }
 
 /**
- * @summary Get dashboard summary stats
+ * @summary Get dashboard summary stats and weekly outlook
  */
 export const getGetDashboardSummaryUrl = () => {
   return `/api/dashboard/summary`;
@@ -1154,7 +1144,7 @@ export const getGetDashboardSummaryQueryKey = () => {
 
 export const getGetDashboardSummaryQueryOptions = <
   TData = Awaited<ReturnType<typeof getDashboardSummary>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getDashboardSummary>>,
@@ -1181,15 +1171,15 @@ export const getGetDashboardSummaryQueryOptions = <
 export type GetDashboardSummaryQueryResult = NonNullable<
   Awaited<ReturnType<typeof getDashboardSummary>>
 >;
-export type GetDashboardSummaryQueryError = ErrorType<unknown>;
+export type GetDashboardSummaryQueryError = unknown;
 
 /**
- * @summary Get dashboard summary stats
+ * @summary Get dashboard summary stats and weekly outlook
  */
 
 export function useGetDashboardSummary<
   TData = Awaited<ReturnType<typeof getDashboardSummary>>,
-  TError = ErrorType<unknown>,
+  TError = unknown,
 >(options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getDashboardSummary>>,

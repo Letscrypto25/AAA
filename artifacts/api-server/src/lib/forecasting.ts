@@ -24,16 +24,26 @@ const FACTOR_KEYS = [
   "jockeyTrainer",
   "oddsMovement",
   "history",
+  "fieldStrength",
+  "weightCarried",
+  "surfaceFit",
+  "paceProfile",
+  "priceValue",
 ] as const;
 
 type FactorKey = (typeof FACTOR_KEYS)[number];
 
 const DEFAULT_WEIGHTS: PredictionWeightConfig = {
-  courseForm: 0.25,
-  formDistance: 0.25,
-  jockeyTrainer: 0.2,
-  oddsMovement: 0.15,
-  history: 0.15,
+  courseForm: 0.18,
+  formDistance: 0.18,
+  jockeyTrainer: 0.14,
+  oddsMovement: 0.10,
+  history: 0.10,
+  fieldStrength: 0.08,
+  weightCarried: 0.07,
+  surfaceFit: 0.06,
+  paceProfile: 0.05,
+  priceValue: 0.04,
 };
 
 const DEFAULT_FACTOR_ADJUSTMENTS: LearningFactorAdjustments = {
@@ -42,6 +52,11 @@ const DEFAULT_FACTOR_ADJUSTMENTS: LearningFactorAdjustments = {
   jockeyTrainer: 0,
   oddsMovement: 0,
   history: 0,
+  fieldStrength: 0,
+  weightCarried: 0,
+  surfaceFit: 0,
+  paceProfile: 0,
+  priceValue: 0,
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -67,6 +82,11 @@ function normalizeWeights(weights: PredictionWeightConfig): PredictionWeightConf
     jockeyTrainer: round(weights.jockeyTrainer / total),
     oddsMovement: round(weights.oddsMovement / total),
     history: round(weights.history / total),
+    fieldStrength: round(weights.fieldStrength / total),
+    weightCarried: round(weights.weightCarried / total),
+    surfaceFit: round(weights.surfaceFit / total),
+    paceProfile: round(weights.paceProfile / total),
+    priceValue: round(weights.priceValue / total),
   };
 }
 
@@ -78,7 +98,7 @@ function normalizeWeightSum(weights: PredictionWeightConfig): PredictionWeightCo
 
   return {
     ...normalized,
-    history: round(normalized.history + drift, 6),
+    priceValue: round(normalized.priceValue + drift, 6),
   };
 }
 
@@ -127,6 +147,11 @@ function buildAdaptiveWeights(
     jockeyTrainer: baseWeights.jockeyTrainer + factorAdjustments.jockeyTrainer * adjustmentStrength,
     oddsMovement: baseWeights.oddsMovement + factorAdjustments.oddsMovement * adjustmentStrength,
     history: baseWeights.history + factorAdjustments.history * adjustmentStrength,
+    fieldStrength: baseWeights.fieldStrength + factorAdjustments.fieldStrength * adjustmentStrength,
+    weightCarried: baseWeights.weightCarried + factorAdjustments.weightCarried * adjustmentStrength,
+    surfaceFit: baseWeights.surfaceFit + factorAdjustments.surfaceFit * adjustmentStrength,
+    paceProfile: baseWeights.paceProfile + factorAdjustments.paceProfile * adjustmentStrength,
+    priceValue: baseWeights.priceValue + factorAdjustments.priceValue * adjustmentStrength,
   };
 
   return normalizeWeightSum({
@@ -135,6 +160,11 @@ function buildAdaptiveWeights(
     jockeyTrainer: clamp(adjusted.jockeyTrainer, 0.05, 0.45),
     oddsMovement: clamp(adjusted.oddsMovement, 0.05, 0.4),
     history: clamp(adjusted.history, 0.05, 0.4),
+    fieldStrength: clamp(adjusted.fieldStrength, 0.03, 0.3),
+    weightCarried: clamp(adjusted.weightCarried, 0.03, 0.25),
+    surfaceFit: clamp(adjusted.surfaceFit, 0.03, 0.25),
+    paceProfile: clamp(adjusted.paceProfile, 0.02, 0.22),
+    priceValue: clamp(adjusted.priceValue, 0.02, 0.2),
   });
 }
 
@@ -209,6 +239,11 @@ function sanitizeFactorBreakdown(
     jockeyTrainer: clamp(Number(factors?.jockeyTrainer ?? fallbackScore), 0, 1),
     oddsMovement: clamp(Number(factors?.oddsMovement ?? fallbackScore), 0, 1),
     history: clamp(Number(factors?.history ?? fallbackScore), 0, 1),
+    fieldStrength: clamp(Number(factors?.fieldStrength ?? fallbackScore), 0, 1),
+    weightCarried: clamp(Number(factors?.weightCarried ?? fallbackScore), 0, 1),
+    surfaceFit: clamp(Number(factors?.surfaceFit ?? fallbackScore), 0, 1),
+    paceProfile: clamp(Number(factors?.paceProfile ?? fallbackScore), 0, 1),
+    priceValue: clamp(Number(factors?.priceValue ?? fallbackScore), 0, 1),
     overall: clamp(Number(factors?.overall ?? fallbackScore), 0, 1),
   };
 }
@@ -235,6 +270,9 @@ function buildFallbackPredictions(
     .map((horse, index) => ({ horse, index }))
     .filter(({ horse }) => !horse.scratched);
   const maxOdds = Math.max(...activeHorses.map(({ horse }) => horse.currentOdds), 1);
+  const averageWeight = activeHorses.reduce((sum, { horse }) => sum + (horse.weight ?? 57), 0) / Math.max(activeHorses.length, 1);
+  const fieldAverageOdds = activeHorses.reduce((sum, { horse }) => sum + horse.currentOdds, 0) / Math.max(activeHorses.length, 1);
+  const competitiveDensity = clamp(1 - (maxOdds - 1.2) / 25, 0.2, 0.95);
 
   return activeHorses.map(({ horse, index }) => {
     const formScore = parseFormScore(horse.form);
@@ -247,19 +285,59 @@ function buildFallbackPredictions(
       0.18,
       0.9,
     );
+    const weightDelta = (averageWeight - (horse.weight ?? averageWeight)) / Math.max(averageWeight, 1);
+    const weightCarriedScore = clamp(0.52 + weightDelta * 3.2, 0.18, 0.88);
+    const surfaceFitScore = clamp(
+      0.38
+        + (horse.courseRecord ? 0.18 : 0)
+        + (horse.distanceRecord ? 0.14 : 0)
+        + (/turf|grass|poly|sand/i.test(horse.notes ?? "") ? 0.08 : 0)
+        + formScore * 0.16,
+      0.22,
+      0.92,
+    );
+    const paceProfileScore = clamp(
+      0.34
+        + formScore * 0.22
+        + marketScores.movementStrength * 0.24
+        + (horse.number <= 4 ? 0.06 : 0)
+        + (horse.number >= 10 ? -0.03 : 0),
+      0.18,
+      0.86,
+    );
+    const fieldStrengthScore = clamp(
+      0.26 + marketScores.marketStrength * 0.42 + competitiveDensity * 0.18 + historyScore * 0.14,
+      0.18,
+      0.9,
+    );
+    const priceValueScore = clamp(
+      0.45 + (historyScore + courseScore + distanceScore) / 6 - horse.currentOdds / Math.max(fieldAverageOdds * 4, 1),
+      0.16,
+      0.9,
+    );
     const factorBlend = {
       courseForm: round(courseScore),
       formDistance: round(Math.max(formScore, distanceScore)),
       jockeyTrainer: round(jockeyTrainerScore),
       oddsMovement: round(marketScores.movementStrength),
       history: round(historyScore),
+      fieldStrength: round(fieldStrengthScore),
+      weightCarried: round(weightCarriedScore),
+      surfaceFit: round(surfaceFitScore),
+      paceProfile: round(paceProfileScore),
+      priceValue: round(priceValueScore),
     };
     const overall = clamp(
       factorBlend.courseForm * weights.courseForm +
         factorBlend.formDistance * weights.formDistance +
         factorBlend.jockeyTrainer * weights.jockeyTrainer +
         factorBlend.oddsMovement * weights.oddsMovement +
-        factorBlend.history * weights.history,
+        factorBlend.history * weights.history +
+        factorBlend.fieldStrength * weights.fieldStrength +
+        factorBlend.weightCarried * weights.weightCarried +
+        factorBlend.surfaceFit * weights.surfaceFit +
+        factorBlend.paceProfile * weights.paceProfile +
+        factorBlend.priceValue * weights.priceValue,
       0.08,
       0.99,
     );
@@ -268,8 +346,10 @@ function buildFallbackPredictions(
       + (horse.distanceRecord ? 1 : 0)
       + (horse.trainerJockeyRecord.trim() ? 1 : 0)
       + (horse.form.trim() ? 1 : 0)
-      + (horse.openingOdds != null ? 1 : 0);
-    const coverageScore = dataCoverage / 5;
+      + (horse.openingOdds != null ? 1 : 0)
+      + (horse.weight != null ? 1 : 0)
+      + (horse.notes?.trim() ? 1 : 0);
+    const coverageScore = dataCoverage / 7;
 
     return {
       horseIndex: index,
@@ -280,7 +360,7 @@ function buildFallbackPredictions(
         ...factorBlend,
         overall: round(overall),
       },
-      aiSummary: "Fallback scoring blended recency-weighted form, market shape, and venue-distance fit.",
+      aiSummary: "Fallback scoring blended form, market, field pressure, carried weight, and value shape.",
     };
   });
 }
@@ -335,6 +415,11 @@ function mergeModelPredictions(
         jockeyTrainer: blendFactorValue(aiFactors.jockeyTrainer, fallbackFactors.jockeyTrainer, aiWeight),
         oddsMovement: blendFactorValue(aiFactors.oddsMovement, fallbackFactors.oddsMovement, aiWeight),
         history: blendFactorValue(aiFactors.history, fallbackFactors.history, aiWeight),
+        fieldStrength: blendFactorValue(aiFactors.fieldStrength, fallbackFactors.fieldStrength, aiWeight),
+        weightCarried: blendFactorValue(aiFactors.weightCarried, fallbackFactors.weightCarried, aiWeight),
+        surfaceFit: blendFactorValue(aiFactors.surfaceFit, fallbackFactors.surfaceFit, aiWeight),
+        paceProfile: blendFactorValue(aiFactors.paceProfile, fallbackFactors.paceProfile, aiWeight),
+        priceValue: blendFactorValue(aiFactors.priceValue, fallbackFactors.priceValue, aiWeight),
         overall: round(blendedScore),
       },
       aiSummary: aiPrediction.aiSummary?.trim() || fallbackPrediction.aiSummary,
@@ -475,6 +560,11 @@ export async function runRaceForecast(
       jockeyTrainer: baseWeights.jockeyTrainer,
       oddsMovement: baseWeights.oddsMovement,
       history: baseWeights.history,
+      fieldStrength: baseWeights.fieldStrength,
+      weightCarried: baseWeights.weightCarried,
+      surfaceFit: baseWeights.surfaceFit,
+      paceProfile: baseWeights.paceProfile,
+      priceValue: baseWeights.priceValue,
     },
     learningSnapshot.factorAdjustments,
     learningSnapshot.sampleSize,
@@ -710,6 +800,11 @@ export async function recordRaceResult(
       jockeyTrainer: 0.5,
       oddsMovement: 0.5,
       history: 0.5,
+      fieldStrength: 0.5,
+      weightCarried: 0.5,
+      surfaceFit: 0.5,
+      paceProfile: 0.5,
+      priceValue: 0.5,
     });
 
     for (const key of FACTOR_KEYS) {

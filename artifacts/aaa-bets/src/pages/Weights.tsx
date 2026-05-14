@@ -28,7 +28,7 @@ const FACTORS = [
   {
     key: "oddsMovement" as const,
     label: "Odds Movement",
-    description: "Market intelligence — shortening odds = market confidence",
+    description: "Market intelligence, shortening odds usually signal confidence",
     color: "bg-chart-4",
   },
   {
@@ -37,14 +37,49 @@ const FACTORS = [
     description: "Overall historical performance at this level",
     color: "bg-chart-5",
   },
+  {
+    key: "fieldStrength" as const,
+    label: "Field Strength",
+    description: "How well the runner profiles against the quality and pressure of this field",
+    color: "bg-chart-1",
+  },
+  {
+    key: "weightCarried" as const,
+    label: "Weight Carried",
+    description: "Today's allocated weight relative to rivals",
+    color: "bg-chart-2",
+  },
+  {
+    key: "surfaceFit" as const,
+    label: "Surface Fit",
+    description: "Suitability to today's track surface and setup",
+    color: "bg-chart-3",
+  },
+  {
+    key: "paceProfile" as const,
+    label: "Pace Profile",
+    description: "How the horse's running shape fits the likely tempo",
+    color: "bg-chart-4",
+  },
+  {
+    key: "priceValue" as const,
+    label: "Price Value",
+    description: "Whether the current market price still offers value",
+    color: "bg-chart-5",
+  },
 ];
 
 const DEFAULTS = {
-  courseForm: 0.25,
-  formDistance: 0.25,
-  jockeyTrainer: 0.20,
-  oddsMovement: 0.15,
-  history: 0.15,
+  courseForm: 0.18,
+  formDistance: 0.18,
+  jockeyTrainer: 0.14,
+  oddsMovement: 0.10,
+  history: 0.10,
+  fieldStrength: 0.08,
+  weightCarried: 0.07,
+  surfaceFit: 0.06,
+  paceProfile: 0.05,
+  priceValue: 0.04,
 };
 
 type WeightKey = keyof typeof DEFAULTS;
@@ -65,6 +100,11 @@ export default function Weights() {
         jockeyTrainer: weights.jockeyTrainer,
         oddsMovement: weights.oddsMovement,
         history: weights.history,
+        fieldStrength: weights.fieldStrength,
+        weightCarried: weights.weightCarried,
+        surfaceFit: weights.surfaceFit,
+        paceProfile: weights.paceProfile,
+        priceValue: weights.priceValue,
       });
     }
   }, [weights]);
@@ -151,7 +191,7 @@ export default function Weights() {
 
       {isLoading ? (
         <div className="space-y-4">
-          {[1, 2, 3, 4, 5].map((i) => (
+          {Array.from({ length: FACTORS.length }, (_, i) => i + 1).map((i) => (
             <div key={i} className="h-20 bg-card border border-card-border rounded-xl animate-pulse" />
           ))}
         </div>
@@ -220,7 +260,7 @@ export default function Weights() {
         <p className="font-medium text-foreground mb-1">Tip</p>
         <p>
           You can also ask the AI Chat to adjust weights for you. For example: "Give more weight to
-          odds movement" and the AI will suggest new values automatically.
+          pace profile and price value" and the AI will suggest a new mix automatically.
         </p>
       </div>
     </div>

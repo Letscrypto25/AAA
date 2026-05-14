@@ -21,11 +21,16 @@ app.listen(port, async (err) => {
   const existingWeights = await db.select().from(predictionWeightsTable).limit(1);
   if (existingWeights.length === 0) {
     await db.insert(predictionWeightsTable).values({
-      courseForm: 0.25,
-      formDistance: 0.25,
-      jockeyTrainer: 0.2,
-      oddsMovement: 0.15,
-      history: 0.15,
+      courseForm: 0.18,
+      formDistance: 0.18,
+      jockeyTrainer: 0.14,
+      oddsMovement: 0.10,
+      history: 0.10,
+      fieldStrength: 0.08,
+      weightCarried: 0.07,
+      surfaceFit: 0.06,
+      paceProfile: 0.05,
+      priceValue: 0.04,
     });
     logger.info("Default prediction weights seeded");
   }
@@ -40,6 +45,11 @@ app.listen(port, async (err) => {
         jockeyTrainer: 0,
         oddsMovement: 0,
         history: 0,
+        fieldStrength: 0,
+        weightCarried: 0,
+        surfaceFit: 0,
+        paceProfile: 0,
+        priceValue: 0,
       },
     });
     logger.info("Learning feedback store seeded");

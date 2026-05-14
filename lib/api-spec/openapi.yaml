@@ -305,6 +305,16 @@ components:
           type: number
         history:
           type: number
+        fieldStrength:
+          type: number
+        weightCarried:
+          type: number
+        surfaceFit:
+          type: number
+        paceProfile:
+          type: number
+        priceValue:
+          type: number
         overall:
           type: number
       required:
@@ -313,6 +323,11 @@ components:
         - jockeyTrainer
         - oddsMovement
         - history
+        - fieldStrength
+        - weightCarried
+        - surfaceFit
+        - paceProfile
+        - priceValue
         - overall
 
     PredictionSummary:
@@ -585,6 +600,16 @@ components:
           type: number
         history:
           type: number
+        fieldStrength:
+          type: number
+        weightCarried:
+          type: number
+        surfaceFit:
+          type: number
+        paceProfile:
+          type: number
+        priceValue:
+          type: number
         updatedAt:
           type: string
       required:
@@ -594,6 +619,11 @@ components:
         - jockeyTrainer
         - oddsMovement
         - history
+        - fieldStrength
+        - weightCarried
+        - surfaceFit
+        - paceProfile
+        - priceValue
         - updatedAt
 
     UpdateWeightsBody:
@@ -609,12 +639,27 @@ components:
           type: number
         history:
           type: number
+        fieldStrength:
+          type: number
+        weightCarried:
+          type: number
+        surfaceFit:
+          type: number
+        paceProfile:
+          type: number
+        priceValue:
+          type: number
       required:
         - courseForm
         - formDistance
         - jockeyTrainer
         - oddsMovement
         - history
+        - fieldStrength
+        - weightCarried
+        - surfaceFit
+        - paceProfile
+        - priceValue
 
     CreateRaceBody:
       type: object

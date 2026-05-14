@@ -11,11 +11,16 @@ router.get("/weights", async (_req, res): Promise<void> => {
     [weights] = await db
       .insert(predictionWeightsTable)
       .values({
-        courseForm: 0.25,
-        formDistance: 0.25,
-        jockeyTrainer: 0.20,
-        oddsMovement: 0.15,
-        history: 0.15,
+        courseForm: 0.18,
+        formDistance: 0.18,
+        jockeyTrainer: 0.14,
+        oddsMovement: 0.10,
+        history: 0.10,
+        fieldStrength: 0.08,
+        weightCarried: 0.07,
+        surfaceFit: 0.06,
+        paceProfile: 0.05,
+        priceValue: 0.04,
       })
       .returning();
   }
@@ -30,8 +35,29 @@ router.put("/weights", async (req, res): Promise<void> => {
     return;
   }
 
-  const { courseForm, formDistance, jockeyTrainer, oddsMovement, history } = body.data;
-  const total = courseForm + formDistance + jockeyTrainer + oddsMovement + history;
+  const {
+    courseForm,
+    formDistance,
+    jockeyTrainer,
+    oddsMovement,
+    history,
+    fieldStrength,
+    weightCarried,
+    surfaceFit,
+    paceProfile,
+    priceValue,
+  } = body.data;
+  const total =
+    courseForm +
+    formDistance +
+    jockeyTrainer +
+    oddsMovement +
+    history +
+    fieldStrength +
+    weightCarried +
+    surfaceFit +
+    paceProfile +
+    priceValue;
 
   if (Math.abs(total - 1.0) > 0.01) {
     res.status(400).json({ error: `Weights must sum to 1.0, got ${total.toFixed(3)}` });
@@ -44,12 +70,35 @@ router.put("/weights", async (req, res): Promise<void> => {
   if (existing) {
     [weights] = await db
       .update(predictionWeightsTable)
-      .set({ courseForm, formDistance, jockeyTrainer, oddsMovement, history, updatedAt: new Date() })
+      .set({
+        courseForm,
+        formDistance,
+        jockeyTrainer,
+        oddsMovement,
+        history,
+        fieldStrength,
+        weightCarried,
+        surfaceFit,
+        paceProfile,
+        priceValue,
+        updatedAt: new Date(),
+      })
       .returning();
   } else {
     [weights] = await db
       .insert(predictionWeightsTable)
-      .values({ courseForm, formDistance, jockeyTrainer, oddsMovement, history })
+      .values({
+        courseForm,
+        formDistance,
+        jockeyTrainer,
+        oddsMovement,
+        history,
+        fieldStrength,
+        weightCarried,
+        surfaceFit,
+        paceProfile,
+        priceValue,
+      })
       .returning();
   }
 
