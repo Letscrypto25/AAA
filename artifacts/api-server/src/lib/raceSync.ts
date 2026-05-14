@@ -620,12 +620,11 @@ function cardMatchesRace(card: NormalizedRaceCard, race: typeof racesTable.$infe
   if (card.raceNumber !== race.raceNumber) return false;
 
   const venueMatches = normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue);
+  if (venueMatches) return true;
 
   const raceHasTime = !!race.raceTime && race.raceTime !== "00:00";
   const cardHasTime = !!card.raceTime && card.raceTime !== "00:00";
-  if (raceHasTime && cardHasTime && card.raceTime !== race.raceTime) return false;
-
-  return venueMatches || (raceHasTime && cardHasTime);
+  return raceHasTime && cardHasTime && card.raceTime === race.raceTime;
 }
 
 function findMatchingCard(cards: NormalizedRaceCard[], race: typeof racesTable.$inferSelect): NormalizedRaceCard | null {
@@ -633,7 +632,6 @@ function findMatchingCard(cards: NormalizedRaceCard[], race: typeof racesTable.$
     card.meetingDate === race.meetingDate
     && card.raceNumber === race.raceNumber
     && normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue)
-    && (card.raceTime === race.raceTime || card.raceTime === "00:00" || race.raceTime === "00:00")
   ));
   if (exactVenueMatch) return exactVenueMatch;
 
@@ -645,14 +643,13 @@ function findMatchingRaceCard(cards: NormalizedRaceCard[], race: Pick<Normalized
     card.meetingDate === race.meetingDate
     && card.raceNumber === race.raceNumber
     && normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue)
-    && (card.raceTime === race.raceTime || card.raceTime === "00:00" || race.raceTime === "00:00")
   ));
   if (exactVenueMatch) return exactVenueMatch;
 
   return cards.find((card) => (
     card.meetingDate === race.meetingDate
     && card.raceNumber === race.raceNumber
-    && (normalizeVenueKey(card.venue) === normalizeVenueKey(race.venue) || card.raceTime === race.raceTime)
+    && card.raceTime === race.raceTime
   )) ?? null;
 }
 
@@ -814,7 +811,19 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
   }
 
   if (!matchedCard) {
-    logger.warn({ raceId, venue: race.venue, raceNumber: race.raceNumber }, "No synced race data matched during refresh");
+    const gallopToday = await resolveGallopTodayDateKey();
+    const isPastRaceDay = !!race.meetingDate && race.meetingDate < gallopToday;
+    const nextRetryAt = isPastRaceDay ? null : getNextUpdateTime(race.raceTime, race.meetingDate);
+
+    await db
+      .update(racesTable)
+      .set({ nextUpdateAt: nextRetryAt })
+      .where(eq(racesTable.id, raceId));
+
+    logger.warn(
+      { raceId, venue: race.venue, raceNumber: race.raceNumber, meetingDate: race.meetingDate, isPastRaceDay, nextRetryAt },
+      "No synced race data matched during refresh",
+    );
     return;
   }
 
