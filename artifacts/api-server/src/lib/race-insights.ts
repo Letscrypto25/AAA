@@ -339,7 +339,12 @@ function strongestEdge(row: LearningRow | undefined): string | null {
 }
 
 export async function getLearningPerformanceSummary(): Promise<LearningPerformanceSummary> {
-  const [learning] = await db.select().from(learningFeedbackTable).limit(1);
+  const [learning] = await db
+    .select()
+    .from(learningFeedbackTable)
+    .where(eq(learningFeedbackTable.scope, "global"))
+    .orderBy(desc(learningFeedbackTable.updatedAt), desc(learningFeedbackTable.id))
+    .limit(1);
   const recentResults = await db
     .select()
     .from(raceResultsTable)

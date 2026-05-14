@@ -121,16 +121,28 @@ async function ensureWeights(): Promise<typeof predictionWeightsTable.$inferSele
   return weights;
 }
 
+async function loadLatestLearningFeedback(): Promise<typeof learningFeedbackTable.$inferSelect | null> {
+  const rows = await db
+    .select()
+    .from(learningFeedbackTable)
+    .where(eq(learningFeedbackTable.scope, "global"))
+    .orderBy(desc(learningFeedbackTable.updatedAt), desc(learningFeedbackTable.id))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
 async function ensureLearningFeedback(): Promise<typeof learningFeedbackTable.$inferSelect> {
-  let [learning] = await db.select().from(learningFeedbackTable).limit(1);
+  let learning = await loadLatestLearningFeedback();
   if (!learning) {
-    [learning] = await db
+    const [created] = await db
       .insert(learningFeedbackTable)
       .values({
         scope: "global",
         factorAdjustments: { ...DEFAULT_FACTOR_ADJUSTMENTS },
       })
       .returning();
+    learning = created;
   }
   return learning;
 }
@@ -745,6 +757,7 @@ export async function recordRaceResult(
         .where(eq(forecastEntriesTable.snapshotId, latestSnapshot.id))
         .orderBy(forecastEntriesTable.rank)
     : [];
+  const learningEntries = snapshotEntries.length > 0 ? snapshotEntries : currentPredictions;
 
   for (const prediction of currentPredictions) {
     const graded = getResultStatus(prediction.horseId, finishMap);
@@ -779,20 +792,28 @@ export async function recordRaceResult(
     })
     .where(eq(racesTable.id, raceId));
 
+  const topPick = learningEntries.find((entry) => entry.rank === 1) ?? null;
+  if (!topPick) {
+    logger.info(
+      { raceId, currentPredictionCount: currentPredictions.length, snapshotEntryCount: snapshotEntries.length },
+      "Skipping learning feedback update because no forecast sample was available for the recorded result",
+    );
+    return { winnerHorseId: input.winnerHorseId, topPickCorrect: false };
+  }
+
   const learning = await ensureLearningFeedback();
   const learningSnapshot = buildLearningSnapshot(learning);
   const sampleSize = learning.sampleSize;
-  const topPick = snapshotEntries.find((entry) => entry.rank === 1) ?? currentPredictions.find((entry) => entry.rank === 1);
   const topPickCorrect = topPick?.horseId === input.winnerHorseId;
   const topPickPlaced = topPick ? (finishMap.get(topPick.horseId) ?? 99) <= 3 : false;
   const topPickConfidence = topPick?.confidence ?? 0.5;
-  const winnerEntry = snapshotEntries.find((entry) => entry.horseId === input.winnerHorseId);
+  const winnerEntry = learningEntries.find((entry) => entry.horseId === input.winnerHorseId);
 
   const nextAdjustments: LearningFactorAdjustments = { ...learningSnapshot.factorAdjustments };
   if (winnerEntry) {
     const averages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
-      const total = snapshotEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
-      acc[key] = snapshotEntries.length > 0 ? total / snapshotEntries.length : 0.5;
+      const total = learningEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
+      acc[key] = learningEntries.length > 0 ? total / learningEntries.length : 0.5;
       return acc;
     }, {
       courseForm: 0.5,

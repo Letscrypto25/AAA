@@ -545,11 +545,15 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
         }
       }
 
-      return {
-        source: "gallop",
-        cards: mergedCards,
-        meetingsFound: countMeetings(mergedCards),
-      };
+      if (mergedCards.some((card) => hasLiveCard(card))) {
+        return {
+          source: "gallop",
+          cards: mergedCards,
+          meetingsFound: countMeetings(mergedCards),
+        };
+      }
+
+      logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; falling back to The Racing API or Tote");
     }
   } catch (err) {
     logger.warn({ err, dateKey }, "Gallop racecard sync failed; falling back to The Racing API or Tote");
