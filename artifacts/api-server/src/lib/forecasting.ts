@@ -34,16 +34,16 @@ const FACTOR_KEYS = [
 type FactorKey = (typeof FACTOR_KEYS)[number];
 
 const DEFAULT_WEIGHTS: PredictionWeightConfig = {
-  courseForm: 0.20,
-  formDistance: 0.20,
-  jockeyTrainer: 0.15,
-  oddsMovement: 0.12,
-  history: 0.12,
-  fieldStrength: 0.10,
-  weightCarried: 0.05,
-  surfaceFit: 0.03,
-  paceProfile: 0.02,
-  priceValue: 0.01,
+  courseForm: 0.18,
+  formDistance: 0.18,
+  jockeyTrainer: 0.14,
+  oddsMovement: 0.10,
+  history: 0.10,
+  fieldStrength: 0.08,
+  weightCarried: 0.07,
+  surfaceFit: 0.06,
+  paceProfile: 0.05,
+  priceValue: 0.04,
 };
 
 const DEFAULT_FACTOR_ADJUSTMENTS: LearningFactorAdjustments = {
@@ -75,6 +75,7 @@ function learningScale(sampleSize: number, saturation: number = 36): number {
 function normalizeWeights(weights: PredictionWeightConfig): PredictionWeightConfig {
   const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
   if (total <= 0) return { ...DEFAULT_WEIGHTS };
+
   return {
     courseForm: round(weights.courseForm / total),
     formDistance: round(weights.formDistance / total),
@@ -94,9 +95,10 @@ function normalizeWeightSum(weights: PredictionWeightConfig): PredictionWeightCo
   const total = Object.values(normalized).reduce((sum, value) => sum + value, 0);
   const drift = round(1 - total, 6);
   if (Math.abs(drift) < 0.000001) return normalized;
+
   return {
     ...normalized,
-    history: round(normalized.history + drift, 6),
+    priceValue: round(normalized.priceValue + drift, 6),
   };
 }
 
@@ -140,16 +142,16 @@ function buildAdaptiveWeights(
 ): PredictionWeightConfig {
   const adjustmentStrength = 0.08 + learningScale(sampleSize, 28) * 0.1;
   const adjusted: PredictionWeightConfig = {
-    courseForm: baseWeights.courseForm + (factorAdjustments.courseForm ?? 0) * adjustmentStrength,
-    formDistance: baseWeights.formDistance + (factorAdjustments.formDistance ?? 0) * adjustmentStrength,
-    jockeyTrainer: baseWeights.jockeyTrainer + (factorAdjustments.jockeyTrainer ?? 0) * adjustmentStrength,
-    oddsMovement: baseWeights.oddsMovement + (factorAdjustments.oddsMovement ?? 0) * adjustmentStrength,
-    history: baseWeights.history + (factorAdjustments.history ?? 0) * adjustmentStrength,
-    fieldStrength: baseWeights.fieldStrength + (factorAdjustments.fieldStrength ?? 0) * adjustmentStrength,
-    weightCarried: baseWeights.weightCarried + (factorAdjustments.weightCarried ?? 0) * adjustmentStrength,
-    surfaceFit: baseWeights.surfaceFit + (factorAdjustments.surfaceFit ?? 0) * adjustmentStrength,
-    paceProfile: baseWeights.paceProfile + (factorAdjustments.paceProfile ?? 0) * adjustmentStrength,
-    priceValue: baseWeights.priceValue + (factorAdjustments.priceValue ?? 0) * adjustmentStrength,
+    courseForm: baseWeights.courseForm + factorAdjustments.courseForm * adjustmentStrength,
+    formDistance: baseWeights.formDistance + factorAdjustments.formDistance * adjustmentStrength,
+    jockeyTrainer: baseWeights.jockeyTrainer + factorAdjustments.jockeyTrainer * adjustmentStrength,
+    oddsMovement: baseWeights.oddsMovement + factorAdjustments.oddsMovement * adjustmentStrength,
+    history: baseWeights.history + factorAdjustments.history * adjustmentStrength,
+    fieldStrength: baseWeights.fieldStrength + factorAdjustments.fieldStrength * adjustmentStrength,
+    weightCarried: baseWeights.weightCarried + factorAdjustments.weightCarried * adjustmentStrength,
+    surfaceFit: baseWeights.surfaceFit + factorAdjustments.surfaceFit * adjustmentStrength,
+    paceProfile: baseWeights.paceProfile + factorAdjustments.paceProfile * adjustmentStrength,
+    priceValue: baseWeights.priceValue + factorAdjustments.priceValue * adjustmentStrength,
   };
 
   return normalizeWeightSum({
@@ -158,11 +160,11 @@ function buildAdaptiveWeights(
     jockeyTrainer: clamp(adjusted.jockeyTrainer, 0.05, 0.45),
     oddsMovement: clamp(adjusted.oddsMovement, 0.05, 0.4),
     history: clamp(adjusted.history, 0.05, 0.4),
-    fieldStrength: clamp(adjusted.fieldStrength, 0.01, 0.3),
-    weightCarried: clamp(adjusted.weightCarried, 0.01, 0.2),
-    surfaceFit: clamp(adjusted.surfaceFit, 0.01, 0.15),
-    paceProfile: clamp(adjusted.paceProfile, 0.01, 0.12),
-    priceValue: clamp(adjusted.priceValue, 0.005, 0.1),
+    fieldStrength: clamp(adjusted.fieldStrength, 0.03, 0.3),
+    weightCarried: clamp(adjusted.weightCarried, 0.03, 0.25),
+    surfaceFit: clamp(adjusted.surfaceFit, 0.03, 0.25),
+    paceProfile: clamp(adjusted.paceProfile, 0.02, 0.22),
+    priceValue: clamp(adjusted.priceValue, 0.02, 0.2),
   });
 }
 
@@ -204,15 +206,6 @@ function parseTrainerJockeyScore(record: string): number {
     }
   }
 
-  // SA-style "112-2 (1.79%)-17 | 261-18 (6.90%)-56" — extract first percentage
-  const saStyleMatch = record.match(/\((\d+\.\d+)%\)/);
-  if (saStyleMatch) {
-    const pct = Number(saStyleMatch[1]);
-    if (Number.isFinite(pct)) {
-      return clamp(0.4 + pct / 100, 0.3, 0.9);
-    }
-  }
-
   return 0.61;
 }
 
@@ -230,151 +223,11 @@ function buildMarketScores(
         ? clamp(0.44 + moveRatio * 0.35, 0.18, 0.48)
         : clamp(0.52 + moveRatio * 0.4, 0.34, 0.74);
 
-  return { marketStrength: impliedStrength, movementStrength };
+  return {
+    marketStrength: impliedStrength,
+    movementStrength,
+  };
 }
-
-// ── NEW FACTOR CALCULATORS ─────────────────────────────────────────────────────
-
-/**
- * FIELD STRENGTH: How weak the opposition is relative to this horse.
- * A horse in a weak field (low avg odds of rivals) scores higher.
- * Uses average implied probability of ALL rivals vs this horse's own probability.
- */
-function buildFieldStrengthScore(
-  horse: typeof horsesTable.$inferSelect,
-  allHorses: Array<typeof horsesTable.$inferSelect>,
-): number {
-  const rivals = allHorses.filter((h) => h.id !== horse.id && !h.scratched);
-  if (rivals.length === 0) return 0.7;
-
-  const impliedProb = (odds: number) => clamp(1 / Math.max(odds, 1.01), 0.02, 0.98);
-  const avgRivalProb = rivals.reduce((sum, h) => sum + impliedProb(h.currentOdds), 0) / rivals.length;
-  const ownProb = impliedProb(horse.currentOdds);
-
-  // If our horse is stronger than the average rival, edge is positive
-  const relativeEdge = ownProb - avgRivalProb;
-  return clamp(0.5 + relativeEdge * 2.5, 0.1, 0.95);
-}
-
-/**
- * WEIGHT CARRIED: Lighter weight vs rivals gives a tangible edge in SA racing.
- * Benchmark against field average — below average weight = higher score.
- */
-function buildWeightCarriedScore(
-  horse: typeof horsesTable.$inferSelect,
-  allHorses: Array<typeof horsesTable.$inferSelect>,
-): number {
-  const activeHorses = allHorses.filter((h) => !h.scratched && h.weight != null);
-  if (!horse.weight || activeHorses.length < 2) return 0.5;
-
-  const avgWeight = activeHorses.reduce((sum, h) => sum + (h.weight ?? 58), 0) / activeHorses.length;
-  const weightDiff = avgWeight - horse.weight; // positive = lighter than avg (good)
-  return clamp(0.5 + weightDiff * 0.06, 0.15, 0.9);
-}
-
-/**
- * SURFACE FIT: Does the horse's form/notes indicate turf or all-weather preference?
- * Cross-references race surface with available indicators.
- * Notes containing "turf", "aw", "all-weather", "polytrack" signal preference.
- */
-function buildSurfaceFitScore(
-  horse: typeof horsesTable.$inferSelect,
-  raceSurface: string,
-): number {
-  const notes = (horse.notes ?? "").toLowerCase();
-  const surface = raceSurface.toLowerCase();
-  const isTurf = surface.includes("turf") || surface === "grass";
-  const isAW = surface.includes("all-weather") || surface.includes("polytrack") || surface.includes("aw");
-
-  // Positive signals
-  if (isTurf && (notes.includes("turf") || notes.includes("grass"))) return 0.82;
-  if (isAW && (notes.includes("all-weather") || notes.includes("polytrack") || notes.includes("aw"))) return 0.82;
-
-  // Negative signals (known wrong-surface horses)
-  if (isTurf && (notes.includes("all-weather") || notes.includes("polytrack"))) return 0.32;
-  if (isAW && (notes.includes("turf") || notes.includes("grass"))) return 0.32;
-
-  // Course record on this surface is a strong positive signal
-  if (horse.courseRecord) return 0.74;
-
-  // Default: slight positive for turf (most SA racing is turf)
-  return isTurf ? 0.57 : 0.52;
-}
-
-/**
- * PACE PROFILE: Does the horse's racing style suit the distance?
- * Short distances (<1200m) favour early speed. Long distances (>1800m) favour stayers.
- * Inferred from form string: early finishes = speed, late picks = stayer.
- */
-function buildPaceProfileScore(
-  horse: typeof horsesTable.$inferSelect,
-  raceDistance: number,
-): number {
-  const form = horse.form;
-  if (!form.trim()) return 0.5;
-
-  const values = form
-    .split("-")
-    .map((v) => Number(v))
-    .filter((v) => Number.isFinite(v) && v >= 0);
-
-  if (values.length === 0) return 0.5;
-
-  // Calculate "early improvement" — does the horse tend to improve in the run?
-  const recentValues = values.slice(-4); // last 4 runs
-  const earlyRuns = recentValues.slice(0, 2);
-  const lateRuns = recentValues.slice(2);
-
-  const avgEarly = earlyRuns.length ? earlyRuns.reduce((s, v) => s + v, 0) / earlyRuns.length : 3;
-  const avgLate = lateRuns.length ? lateRuns.reduce((s, v) => s + v, 0) / lateRuns.length : 3;
-  const improvement = avgEarly - avgLate; // positive = late improver (stayer)
-
-  const isSprint = raceDistance <= 1200;
-  const isMile = raceDistance > 1200 && raceDistance <= 1600;
-  const isStay = raceDistance > 1600;
-
-  if (isSprint) {
-    // Sprints: want horses with early speed (low early positions, no need for late run)
-    const formScore = values.slice(-3).reduce((s, v) => s + Math.max(0, 4 - v), 0) / 3;
-    return clamp(0.45 + formScore * 0.12 - improvement * 0.06, 0.2, 0.85);
-  }
-
-  if (isMile) {
-    // Miles: balanced — moderate pace suits all styles
-    return clamp(0.5 + Math.abs(improvement) * 0.04, 0.3, 0.78);
-  }
-
-  if (isStay) {
-    // Staying races: late improvers preferred
-    return clamp(0.45 + improvement * 0.08, 0.2, 0.88);
-  }
-
-  return 0.5;
-}
-
-/**
- * PRICE VALUE: Is the horse's market odds offering value vs its predicted probability?
- * Predicted probability is estimated from our factor scores. If the market underestimates
- * the horse (better true odds than market), this is a value bet signal.
- */
-function buildPriceValueScore(
-  horse: typeof horsesTable.$inferSelect,
-  predictedScore: number,
-  allHorses: Array<typeof horsesTable.$inferSelect>,
-): number {
-  // Estimated true win probability from our model score
-  const fieldSize = allHorses.filter((h) => !h.scratched).length;
-  const baseProbability = clamp(predictedScore / fieldSize + predictedScore * 0.3, 0.02, 0.85);
-
-  // Market implied probability
-  const impliedProb = clamp(1 / Math.max(horse.currentOdds, 1.01), 0.02, 0.99);
-
-  // Value = true prob is higher than market (positive edge)
-  const valueEdge = baseProbability - impliedProb;
-  return clamp(0.5 + valueEdge * 3.5, 0.05, 0.95);
-}
-
-// ── END NEW FACTOR CALCULATORS ─────────────────────────────────────────────────
 
 function sanitizeFactorBreakdown(
   factors: Partial<PredictionFactorBreakdown> | undefined,
@@ -386,11 +239,11 @@ function sanitizeFactorBreakdown(
     jockeyTrainer: clamp(Number(factors?.jockeyTrainer ?? fallbackScore), 0, 1),
     oddsMovement: clamp(Number(factors?.oddsMovement ?? fallbackScore), 0, 1),
     history: clamp(Number(factors?.history ?? fallbackScore), 0, 1),
-    fieldStrength: clamp(Number(factors?.fieldStrength ?? 0.5), 0, 1),
-    weightCarried: clamp(Number(factors?.weightCarried ?? 0.5), 0, 1),
-    surfaceFit: clamp(Number(factors?.surfaceFit ?? 0.5), 0, 1),
-    paceProfile: clamp(Number(factors?.paceProfile ?? 0.5), 0, 1),
-    priceValue: clamp(Number(factors?.priceValue ?? 0.5), 0, 1),
+    fieldStrength: clamp(Number(factors?.fieldStrength ?? fallbackScore), 0, 1),
+    weightCarried: clamp(Number(factors?.weightCarried ?? fallbackScore), 0, 1),
+    surfaceFit: clamp(Number(factors?.surfaceFit ?? fallbackScore), 0, 1),
+    paceProfile: clamp(Number(factors?.paceProfile ?? fallbackScore), 0, 1),
+    priceValue: clamp(Number(factors?.priceValue ?? fallbackScore), 0, 1),
     overall: clamp(Number(factors?.overall ?? fallbackScore), 0, 1),
   };
 }
@@ -412,13 +265,14 @@ function getFactorProfile(factors: PredictionFactorBreakdown): {
 function buildFallbackPredictions(
   horses: Array<typeof horsesTable.$inferSelect>,
   weights: PredictionWeightConfig,
-  raceSurface: string = "turf",
-  raceDistance: number = 1600,
 ): HorsePrediction[] {
   const activeHorses = horses
     .map((horse, index) => ({ horse, index }))
     .filter(({ horse }) => !horse.scratched);
   const maxOdds = Math.max(...activeHorses.map(({ horse }) => horse.currentOdds), 1);
+  const averageWeight = activeHorses.reduce((sum, { horse }) => sum + (horse.weight ?? 57), 0) / Math.max(activeHorses.length, 1);
+  const fieldAverageOdds = activeHorses.reduce((sum, { horse }) => sum + horse.currentOdds, 0) / Math.max(activeHorses.length, 1);
+  const competitiveDensity = clamp(1 - (maxOdds - 1.2) / 25, 0.2, 0.95);
 
   return activeHorses.map(({ horse, index }) => {
     const formScore = parseFormScore(horse.form);
@@ -431,20 +285,36 @@ function buildFallbackPredictions(
       0.18,
       0.9,
     );
-
-    // ── New factor scores ────────────────────────────────────────────────────
-    const fieldStrengthScore = buildFieldStrengthScore(horse, horses);
-    const weightCarriedScore = buildWeightCarriedScore(horse, horses);
-    const surfaceFitScore = buildSurfaceFitScore(horse, raceSurface);
-    const paceProfileScore = buildPaceProfileScore(horse, raceDistance);
-    // Price value needs rough base score to estimate
-    const roughBaseScore = clamp(
-      courseScore * 0.2 + distanceScore * 0.2 + jockeyTrainerScore * 0.15 + marketScores.movementStrength * 0.12 + historyScore * 0.12,
-      0.1, 0.9,
+    const weightDelta = (averageWeight - (horse.weight ?? averageWeight)) / Math.max(averageWeight, 1);
+    const weightCarriedScore = clamp(0.52 + weightDelta * 3.2, 0.18, 0.88);
+    const surfaceFitScore = clamp(
+      0.38
+        + (horse.courseRecord ? 0.18 : 0)
+        + (horse.distanceRecord ? 0.14 : 0)
+        + (/turf|grass|poly|sand/i.test(horse.notes ?? "") ? 0.08 : 0)
+        + formScore * 0.16,
+      0.22,
+      0.92,
     );
-    const priceValueScore = buildPriceValueScore(horse, roughBaseScore, horses);
-    // ─────────────────────────────────────────────────────────────────────────
-
+    const paceProfileScore = clamp(
+      0.34
+        + formScore * 0.22
+        + marketScores.movementStrength * 0.24
+        + (horse.number <= 4 ? 0.06 : 0)
+        + (horse.number >= 10 ? -0.03 : 0),
+      0.18,
+      0.86,
+    );
+    const fieldStrengthScore = clamp(
+      0.26 + marketScores.marketStrength * 0.42 + competitiveDensity * 0.18 + historyScore * 0.14,
+      0.18,
+      0.9,
+    );
+    const priceValueScore = clamp(
+      0.45 + (historyScore + courseScore + distanceScore) / 6 - horse.currentOdds / Math.max(fieldAverageOdds * 4, 1),
+      0.16,
+      0.9,
+    );
     const factorBlend = {
       courseForm: round(courseScore),
       formDistance: round(Math.max(formScore, distanceScore)),
@@ -457,7 +327,6 @@ function buildFallbackPredictions(
       paceProfile: round(paceProfileScore),
       priceValue: round(priceValueScore),
     };
-
     const overall = clamp(
       factorBlend.courseForm * weights.courseForm +
         factorBlend.formDistance * weights.formDistance +
@@ -472,14 +341,15 @@ function buildFallbackPredictions(
       0.08,
       0.99,
     );
-
     const dataCoverage =
       (horse.courseRecord ? 1 : 0)
       + (horse.distanceRecord ? 1 : 0)
       + (horse.trainerJockeyRecord.trim() ? 1 : 0)
       + (horse.form.trim() ? 1 : 0)
-      + (horse.openingOdds != null ? 1 : 0);
-    const coverageScore = dataCoverage / 5;
+      + (horse.openingOdds != null ? 1 : 0)
+      + (horse.weight != null ? 1 : 0)
+      + (horse.notes?.trim() ? 1 : 0);
+    const coverageScore = dataCoverage / 7;
 
     return {
       horseIndex: index,
@@ -490,7 +360,7 @@ function buildFallbackPredictions(
         ...factorBlend,
         overall: round(overall),
       },
-      aiSummary: "Fallback scoring: recency-weighted form, market shape, venue-distance fit, field strength, weight, surface, pace, and value edge.",
+      aiSummary: "Fallback scoring blended form, market, field pressure, carried weight, and value shape.",
     };
   });
 }
@@ -540,18 +410,16 @@ function mergeModelPredictions(
       score: round(blendedScore),
       confidence: round(blendedConfidence),
       factors: {
-        // AI handles original 5 factors, fallback handles the new 5 (AI doesn't know about them yet)
         courseForm: blendFactorValue(aiFactors.courseForm, fallbackFactors.courseForm, aiWeight),
         formDistance: blendFactorValue(aiFactors.formDistance, fallbackFactors.formDistance, aiWeight),
         jockeyTrainer: blendFactorValue(aiFactors.jockeyTrainer, fallbackFactors.jockeyTrainer, aiWeight),
         oddsMovement: blendFactorValue(aiFactors.oddsMovement, fallbackFactors.oddsMovement, aiWeight),
         history: blendFactorValue(aiFactors.history, fallbackFactors.history, aiWeight),
-        // New factors: always use fallback's data-driven computation (AI doesn't score these yet)
-        fieldStrength: fallbackFactors.fieldStrength,
-        weightCarried: fallbackFactors.weightCarried,
-        surfaceFit: fallbackFactors.surfaceFit,
-        paceProfile: fallbackFactors.paceProfile,
-        priceValue: fallbackFactors.priceValue,
+        fieldStrength: blendFactorValue(aiFactors.fieldStrength, fallbackFactors.fieldStrength, aiWeight),
+        weightCarried: blendFactorValue(aiFactors.weightCarried, fallbackFactors.weightCarried, aiWeight),
+        surfaceFit: blendFactorValue(aiFactors.surfaceFit, fallbackFactors.surfaceFit, aiWeight),
+        paceProfile: blendFactorValue(aiFactors.paceProfile, fallbackFactors.paceProfile, aiWeight),
+        priceValue: blendFactorValue(aiFactors.priceValue, fallbackFactors.priceValue, aiWeight),
         overall: round(blendedScore),
       },
       aiSummary: aiPrediction.aiSummary?.trim() || fallbackPrediction.aiSummary,
@@ -563,7 +431,7 @@ function getFactorSignal(
   factors: PredictionFactorBreakdown,
   adjustments: LearningFactorAdjustments,
 ): number {
-  return FACTOR_KEYS.reduce((sum, key) => sum + (adjustments[key] ?? 0) * ((factors[key] ?? 0.5) - 0.5), 0);
+  return FACTOR_KEYS.reduce((sum, key) => sum + adjustments[key] * ((factors[key] ?? 0.5) - 0.5), 0);
 }
 
 function decoratePredictions(
@@ -685,8 +553,6 @@ export async function runRaceForecast(
   const baseWeights = await ensureWeights();
   const learning = await ensureLearningFeedback();
   const learningSnapshot = buildLearningSnapshot(learning);
-
-  // Build full 10-factor adaptive weights
   const adaptiveWeights = buildAdaptiveWeights(
     {
       courseForm: baseWeights.courseForm,
@@ -694,17 +560,16 @@ export async function runRaceForecast(
       jockeyTrainer: baseWeights.jockeyTrainer,
       oddsMovement: baseWeights.oddsMovement,
       history: baseWeights.history,
-      fieldStrength: (baseWeights as any).fieldStrength ?? DEFAULT_WEIGHTS.fieldStrength,
-      weightCarried: (baseWeights as any).weightCarried ?? DEFAULT_WEIGHTS.weightCarried,
-      surfaceFit: (baseWeights as any).surfaceFit ?? DEFAULT_WEIGHTS.surfaceFit,
-      paceProfile: (baseWeights as any).paceProfile ?? DEFAULT_WEIGHTS.paceProfile,
-      priceValue: (baseWeights as any).priceValue ?? DEFAULT_WEIGHTS.priceValue,
+      fieldStrength: baseWeights.fieldStrength,
+      weightCarried: baseWeights.weightCarried,
+      surfaceFit: baseWeights.surfaceFit,
+      paceProfile: baseWeights.paceProfile,
+      priceValue: baseWeights.priceValue,
     },
     learningSnapshot.factorAdjustments,
     learningSnapshot.sampleSize,
   );
-
-  const fallbackPredictions = buildFallbackPredictions(horses, adaptiveWeights, race.surface, race.distance);
+  const fallbackPredictions = buildFallbackPredictions(horses, adaptiveWeights);
 
   let rawPredictions: HorsePrediction[];
   try {
@@ -778,19 +643,19 @@ export async function runRaceForecast(
       raceId,
       horseId: horses[prediction.horseIndex].id,
       snapshotId: snapshot.id,
-      rank: prediction.rank,
-      score: prediction.score,
-      baseConfidence: prediction.baseConfidence,
-      confidence: prediction.confidence,
-      confidenceDelta: prediction.confidenceDelta,
-      confidenceBand: prediction.confidenceBand,
-      timeToRaceMinutes: prediction.timeToRaceMinutes,
-      resultStatus: "pending",
-      finishPosition: null,
-      gradedAt: null,
-      factors: prediction.factors,
-      aiSummary: prediction.aiSummary,
-    }));
+    rank: prediction.rank,
+    score: prediction.score,
+    baseConfidence: prediction.baseConfidence,
+    confidence: prediction.confidence,
+    confidenceDelta: prediction.confidenceDelta,
+    confidenceBand: prediction.confidenceBand,
+    timeToRaceMinutes: prediction.timeToRaceMinutes,
+    resultStatus: "pending",
+    finishPosition: null,
+    gradedAt: null,
+    factors: prediction.factors,
+    aiSummary: prediction.aiSummary,
+  }));
 
   await db.insert(predictionsTable).values(currentPredictionRows);
   await db.insert(forecastEntriesTable).values(currentPredictionRows);
@@ -840,14 +705,16 @@ export async function recordRaceResult(
   if (existingResult.length > 0) throw new Error("Result already recorded");
 
   const horses = await db.select().from(horsesTable).where(eq(horsesTable.raceId, raceId));
-  const horseNameById = new Map(horses.map((h) => [h.id, h.name]));
+  const horseIds = new Set(horses.map((horse) => horse.id));
 
-  const finishMap = new Map<number, number>();
-  finishMap.set(input.winnerHorseId, 1);
-  if (input.runnerUpHorseId) finishMap.set(input.runnerUpHorseId, 2);
-  if (input.thirdHorseId) finishMap.set(input.thirdHorseId, 3);
+  if (!horseIds.has(input.winnerHorseId)) throw new Error("Winner does not belong to this race");
+  if (input.runnerUpHorseId && !horseIds.has(input.runnerUpHorseId)) throw new Error("Runner-up does not belong to this race");
+  if (input.thirdHorseId && !horseIds.has(input.thirdHorseId)) throw new Error("Third place horse does not belong to this race");
 
   const now = new Date();
+  const finishMap = new Map<number, number>([[input.winnerHorseId, 1]]);
+  if (input.runnerUpHorseId) finishMap.set(input.runnerUpHorseId, 2);
+  if (input.thirdHorseId) finishMap.set(input.thirdHorseId, 3);
 
   await db.insert(raceResultsTable).values({
     raceId,
@@ -861,36 +728,45 @@ export async function recordRaceResult(
   const currentPredictions = await db
     .select()
     .from(predictionsTable)
-    .where(eq(predictionsTable.raceId, raceId));
+    .where(eq(predictionsTable.raceId, raceId))
+    .orderBy(predictionsTable.rank);
 
-  for (const prediction of currentPredictions) {
-    const { status, finishPosition } = getResultStatus(prediction.horseId, finishMap);
-    await db
-      .update(predictionsTable)
-      .set({ resultStatus: status, finishPosition, gradedAt: now })
-      .where(eq(predictionsTable.id, prediction.id));
-  }
-
-  const latestSnapshot = await db
+  const [latestSnapshot] = await db
     .select()
     .from(forecastSnapshotsTable)
     .where(eq(forecastSnapshotsTable.raceId, raceId))
     .orderBy(desc(forecastSnapshotsTable.createdAt))
     .limit(1);
 
-  const snapshotEntries = latestSnapshot[0]
+  const snapshotEntries = latestSnapshot
     ? await db
         .select()
         .from(forecastEntriesTable)
-        .where(eq(forecastEntriesTable.snapshotId, latestSnapshot[0].id))
+        .where(eq(forecastEntriesTable.snapshotId, latestSnapshot.id))
         .orderBy(forecastEntriesTable.rank)
     : [];
 
+  for (const prediction of currentPredictions) {
+    const graded = getResultStatus(prediction.horseId, finishMap);
+    await db
+      .update(predictionsTable)
+      .set({
+        resultStatus: graded.status,
+        finishPosition: graded.finishPosition,
+        gradedAt: now,
+      })
+      .where(eq(predictionsTable.id, prediction.id));
+  }
+
   for (const entry of snapshotEntries) {
-    const { status, finishPosition } = getResultStatus(entry.horseId, finishMap);
+    const graded = getResultStatus(entry.horseId, finishMap);
     await db
       .update(forecastEntriesTable)
-      .set({ resultStatus: status, finishPosition, gradedAt: now })
+      .set({
+        resultStatus: graded.status,
+        finishPosition: graded.finishPosition,
+        gradedAt: now,
+      })
       .where(eq(forecastEntriesTable.id, entry.id));
   }
 
@@ -913,20 +789,22 @@ export async function recordRaceResult(
   const winnerEntry = snapshotEntries.find((entry) => entry.horseId === input.winnerHorseId);
 
   const nextAdjustments: LearningFactorAdjustments = { ...learningSnapshot.factorAdjustments };
-
-  // Ensure all new factor keys exist in adjustments
-  for (const key of FACTOR_KEYS) {
-    if (nextAdjustments[key] === undefined) nextAdjustments[key] = 0;
-  }
-
   if (winnerEntry) {
     const averages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
       const total = snapshotEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
       acc[key] = snapshotEntries.length > 0 ? total / snapshotEntries.length : 0.5;
       return acc;
     }, {
-      courseForm: 0.5, formDistance: 0.5, jockeyTrainer: 0.5, oddsMovement: 0.5, history: 0.5,
-      fieldStrength: 0.5, weightCarried: 0.5, surfaceFit: 0.5, paceProfile: 0.5, priceValue: 0.5,
+      courseForm: 0.5,
+      formDistance: 0.5,
+      jockeyTrainer: 0.5,
+      oddsMovement: 0.5,
+      history: 0.5,
+      fieldStrength: 0.5,
+      weightCarried: 0.5,
+      surfaceFit: 0.5,
+      paceProfile: 0.5,
+      priceValue: 0.5,
     });
 
     for (const key of FACTOR_KEYS) {
@@ -935,7 +813,7 @@ export async function recordRaceResult(
         ? averages[key]
         : (topPick?.factors as PredictionFactorBreakdown | undefined)?.[key] ?? averages[key];
       const signal = clamp(winnerValue - baselineValue, -1, 1) * 0.08;
-      nextAdjustments[key] = round(clamp(roundMovingAverage(learningSnapshot.factorAdjustments[key] ?? 0, sampleSize, signal), -0.18, 0.18));
+      nextAdjustments[key] = round(clamp(roundMovingAverage(learningSnapshot.factorAdjustments[key], sampleSize, signal), -0.18, 0.18));
     }
   }
 

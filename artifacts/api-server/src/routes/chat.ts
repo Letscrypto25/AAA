@@ -35,6 +35,11 @@ type WeightSnapshot = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 };
 
 type ChatActionResult = {
@@ -61,6 +66,11 @@ function getWeightSnapshot(weights: WeightSnapshot): WeightSnapshot {
     jockeyTrainer: weights.jockeyTrainer,
     oddsMovement: weights.oddsMovement,
     history: weights.history,
+    fieldStrength: weights.fieldStrength,
+    weightCarried: weights.weightCarried,
+    surfaceFit: weights.surfaceFit,
+    paceProfile: weights.paceProfile,
+    priceValue: weights.priceValue,
   };
 }
 
@@ -71,6 +81,11 @@ function normalizeWeightMix(weights: WeightSnapshot): WeightSnapshot {
     jockeyTrainer: Math.max(0.01, weights.jockeyTrainer),
     oddsMovement: Math.max(0.01, weights.oddsMovement),
     history: Math.max(0.01, weights.history),
+    fieldStrength: Math.max(0.01, weights.fieldStrength),
+    weightCarried: Math.max(0.01, weights.weightCarried),
+    surfaceFit: Math.max(0.01, weights.surfaceFit),
+    paceProfile: Math.max(0.01, weights.paceProfile),
+    priceValue: Math.max(0.01, weights.priceValue),
   };
   const total = Object.values(sanitized).reduce((sum, value) => sum + value, 0);
 
@@ -80,6 +95,11 @@ function normalizeWeightMix(weights: WeightSnapshot): WeightSnapshot {
     jockeyTrainer: sanitized.jockeyTrainer / total,
     oddsMovement: sanitized.oddsMovement / total,
     history: sanitized.history / total,
+    fieldStrength: sanitized.fieldStrength / total,
+    weightCarried: sanitized.weightCarried / total,
+    surfaceFit: sanitized.surfaceFit / total,
+    paceProfile: sanitized.paceProfile / total,
+    priceValue: sanitized.priceValue / total,
   };
 }
 
@@ -90,6 +110,11 @@ function formatWeightLine(weights: WeightSnapshot): string {
     `Jockey/Trainer ${(weights.jockeyTrainer * 100).toFixed(0)}%`,
     `Odds ${(weights.oddsMovement * 100).toFixed(0)}%`,
     `History ${(weights.history * 100).toFixed(0)}%`,
+    `Field ${(weights.fieldStrength * 100).toFixed(0)}%`,
+    `Weight ${(weights.weightCarried * 100).toFixed(0)}%`,
+    `Surface ${(weights.surfaceFit * 100).toFixed(0)}%`,
+    `Pace ${(weights.paceProfile * 100).toFixed(0)}%`,
+    `Value ${(weights.priceValue * 100).toFixed(0)}%`,
   ].join(" | ");
 }
 
@@ -513,7 +538,18 @@ router.post("/chat", async (req, res): Promise<void> => {
   if (!weights) {
     [weights] = await db
       .insert(predictionWeightsTable)
-      .values({ courseForm: 0.25, formDistance: 0.25, jockeyTrainer: 0.2, oddsMovement: 0.15, history: 0.15 })
+      .values({
+        courseForm: 0.18,
+        formDistance: 0.18,
+        jockeyTrainer: 0.14,
+        oddsMovement: 0.10,
+        history: 0.10,
+        fieldStrength: 0.08,
+        weightCarried: 0.07,
+        surfaceFit: 0.06,
+        paceProfile: 0.05,
+        priceValue: 0.04,
+      })
       .returning();
   }
 
@@ -568,6 +604,11 @@ router.post("/chat", async (req, res): Promise<void> => {
       jockeyTrainer: aiResult.weightSuggestions.jockeyTrainer ?? currentWeights.jockeyTrainer,
       oddsMovement: aiResult.weightSuggestions.oddsMovement ?? currentWeights.oddsMovement,
       history: aiResult.weightSuggestions.history ?? currentWeights.history,
+      fieldStrength: aiResult.weightSuggestions.fieldStrength ?? currentWeights.fieldStrength,
+      weightCarried: aiResult.weightSuggestions.weightCarried ?? currentWeights.weightCarried,
+      surfaceFit: aiResult.weightSuggestions.surfaceFit ?? currentWeights.surfaceFit,
+      paceProfile: aiResult.weightSuggestions.paceProfile ?? currentWeights.paceProfile,
+      priceValue: aiResult.weightSuggestions.priceValue ?? currentWeights.priceValue,
     });
     const [updated] = await db
       .update(predictionWeightsTable)

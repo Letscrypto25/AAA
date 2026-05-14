@@ -47,6 +47,11 @@ type WeightsUpdate = {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
   updatedAt: string;
 };
 
@@ -171,7 +176,7 @@ export default function Chat() {
         `Analyze today's live races now`,
         `Sync the live card now`,
         `Increase weight on odds movement`,
-        `Set weights to 30% course form, 25% form and distance, 20% jockey and trainer, 15% odds movement, 10% history`,
+        `Set weights to 18% course form, 18% form and distance, 14% jockey and trainer, 10% odds movement, 10% history, 8% field strength, 7% weight carried, 6% surface fit, 5% pace profile, 4% price value`,
       ].filter((value): value is string => Boolean(value))
     : [
         "Sync the live card now",
@@ -212,7 +217,7 @@ export default function Chat() {
         <div className="mx-6 mt-3 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-accent/10 border border-accent/20">
           <Settings2 className="size-4 text-accent shrink-0" />
           <p className="text-xs text-accent flex-1">
-            <strong>Weights updated:</strong> Course Form {(lastWeightsUpdate.courseForm * 100).toFixed(0)}% · Form/Dist {(lastWeightsUpdate.formDistance * 100).toFixed(0)}% · Jockey/Trainer {(lastWeightsUpdate.jockeyTrainer * 100).toFixed(0)}% · Odds {(lastWeightsUpdate.oddsMovement * 100).toFixed(0)}% · History {(lastWeightsUpdate.history * 100).toFixed(0)}%
+            <strong>Weights updated:</strong> Course {(lastWeightsUpdate.courseForm * 100).toFixed(0)}% · Form {(lastWeightsUpdate.formDistance * 100).toFixed(0)}% · J/T {(lastWeightsUpdate.jockeyTrainer * 100).toFixed(0)}% · Odds {(lastWeightsUpdate.oddsMovement * 100).toFixed(0)}% · Hist {(lastWeightsUpdate.history * 100).toFixed(0)}% · Field {(lastWeightsUpdate.fieldStrength * 100).toFixed(0)}% · Weight {(lastWeightsUpdate.weightCarried * 100).toFixed(0)}% · Surface {(lastWeightsUpdate.surfaceFit * 100).toFixed(0)}% · Pace {(lastWeightsUpdate.paceProfile * 100).toFixed(0)}% · Value {(lastWeightsUpdate.priceValue * 100).toFixed(0)}%
           </p>
           <button onClick={() => setLastWeightsUpdate(null)} className="text-muted-foreground hover:text-foreground text-base leading-none">&times;</button>
         </div>

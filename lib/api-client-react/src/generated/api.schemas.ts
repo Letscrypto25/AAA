@@ -9,21 +9,17 @@ export interface HealthStatus {
   status: string;
 }
 
-export type RaceStatus = (typeof RaceStatus)[keyof typeof RaceStatus];
-
-export const RaceStatus = {
-  upcoming: "upcoming",
-  analyzing: "analyzing",
-  completed: "completed",
-  cancelled: "cancelled",
-} as const;
-
 export interface PredictionFactors {
   courseForm: number;
   formDistance: number;
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
   overall: number;
 }
 
@@ -46,6 +42,14 @@ export interface PredictionSummary {
   aiSummary?: string | null;
 }
 
+export type Prediction = PredictionSummary & {
+  raceId: number;
+  factors: PredictionFactors;
+  createdAt: string;
+  /** @nullable */
+  gradedAt?: string | null;
+};
+
 export interface RaceResultSummary {
   winnerHorseId: number;
   winnerHorseName: string;
@@ -63,6 +67,15 @@ export interface RaceResultSummary {
   /** @nullable */
   topPickCorrect?: boolean | null;
 }
+
+export type RaceStatus = (typeof RaceStatus)[keyof typeof RaceStatus];
+
+export const RaceStatus = {
+  upcoming: "upcoming",
+  analyzing: "analyzing",
+  completed: "completed",
+  cancelled: "cancelled",
+} as const;
 
 export interface Race {
   id: number;
@@ -94,10 +107,8 @@ export interface Race {
   minutesToRace?: number | null;
   forecastBand: string;
   prominence: number;
-  /** @nullable */
   topPrediction?: PredictionSummary | null;
   topPredictions: PredictionSummary[];
-  /** @nullable */
   result?: RaceResultSummary | null;
 }
 
@@ -136,18 +147,10 @@ export interface Horse {
   createdAt: string;
 }
 
-export interface Prediction extends PredictionSummary {
-  raceId: number;
-  factors: PredictionFactors;
-  createdAt: string;
-  /** @nullable */
-  gradedAt?: string | null;
-}
-
-export interface RaceDetail extends Race {
+export type RaceDetail = Race & {
   horses: Horse[];
   predictions: Prediction[];
-}
+};
 
 export interface AnalysisResult {
   raceId: number;
@@ -163,6 +166,11 @@ export interface PredictionWeights {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
   updatedAt: string;
 }
 
@@ -172,6 +180,11 @@ export interface UpdateWeightsBody {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 }
 
 export interface CreateRaceBody {
@@ -242,7 +255,7 @@ export interface ChatMessage {
 
 export interface ChatResponse {
   message: string;
-  updatedWeights?: PredictionWeights;
+  updatedWeights?: PredictionWeights | null;
   triggeredAnalysis: boolean;
 }
 
@@ -257,13 +270,21 @@ export interface PerformanceResultSummary {
   topPickCorrect: boolean;
 }
 
+export type DashboardPerformanceSummaryFactorAdjustments = {
+  courseForm: number;
+  formDistance: number;
+  jockeyTrainer: number;
+  oddsMovement: number;
+  history: number;
+};
+
 export interface DashboardPerformanceSummary {
   sampleSize: number;
   topPickWinRate: number;
   placedRate: number;
   averageConfidence: number;
   confidenceBias: number;
-  factorAdjustments: PredictionFactors;
+  factorAdjustments: DashboardPerformanceSummaryFactorAdjustments;
   /** @nullable */
   strongestEdge?: string | null;
   recentResults: PerformanceResultSummary[];

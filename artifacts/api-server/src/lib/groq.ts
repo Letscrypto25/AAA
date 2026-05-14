@@ -46,12 +46,11 @@ export interface WeightConfig {
   jockeyTrainer: number;
   oddsMovement: number;
   history: number;
-  // New factors
-  fieldStrength?: number;
-  weightCarried?: number;
-  surfaceFit?: number;
-  paceProfile?: number;
-  priceValue?: number;
+  fieldStrength: number;
+  weightCarried: number;
+  surfaceFit: number;
+  paceProfile: number;
+  priceValue: number;
 }
 
 export interface HorsePrediction {
@@ -65,12 +64,11 @@ export interface HorsePrediction {
     jockeyTrainer: number;
     oddsMovement: number;
     history: number;
-    // New factors (populated by fallback model, not AI)
-    fieldStrength?: number;
-    weightCarried?: number;
-    surfaceFit?: number;
-    paceProfile?: number;
-    priceValue?: number;
+    fieldStrength: number;
+    weightCarried: number;
+    surfaceFit: number;
+    paceProfile: number;
+    priceValue: number;
     overall: number;
   };
   aiSummary: string;
@@ -289,12 +287,17 @@ Date: ${race.meetingDate ?? "today"}
 HORSES:
 ${horseDescriptions}
 
-WEIGHTING FACTORS (score each 0.0–1.0):
-- Course Form (record at this venue): ${(weights.courseForm * 100).toFixed(0)}%
-- Form & Distance (recent form + trip suitability): ${(weights.formDistance * 100).toFixed(0)}%
-- Jockey/Trainer (booking quality, partnership strike rate): ${(weights.jockeyTrainer * 100).toFixed(0)}%
-- Odds Movement (shortening = market confidence): ${(weights.oddsMovement * 100).toFixed(0)}%
-- History (class, career record): ${(weights.history * 100).toFixed(0)}%
+WEIGHTING FACTORS:
+- Course Form (horse's record at this venue): ${(weights.courseForm * 100).toFixed(0)}%
+- Form & Distance (recent form + suitability for this distance): ${(weights.formDistance * 100).toFixed(0)}%
+- Jockey/Trainer (quality of booking, partnership record): ${(weights.jockeyTrainer * 100).toFixed(0)}%
+- Odds Movement (market intelligence - shortening = confidence): ${(weights.oddsMovement * 100).toFixed(0)}%
+- History (overall historical performance at this level): ${(weights.history * 100).toFixed(0)}%
+- Field Strength (ability to handle the quality and pressure of this field): ${(weights.fieldStrength * 100).toFixed(0)}%
+- Weight Carried (today's allocated weight relative to rivals): ${(weights.weightCarried * 100).toFixed(0)}%
+- Surface Fit (suitability to the track surface and setup): ${(weights.surfaceFit * 100).toFixed(0)}%
+- Pace Profile (how the runner's shape suits the likely race tempo): ${(weights.paceProfile * 100).toFixed(0)}%
+- Price Value (whether the odds still offer betting value): ${(weights.priceValue * 100).toFixed(0)}%
 
 For each horse provide factor scores (0.0-1.0), overall weighted score, confidence, and 1-sentence analysis.
 Use the official runner number shown as #N as the horse identity. Keep that runner number exact and return it in the JSON.
@@ -305,10 +308,10 @@ Respond with ONLY valid JSON:
     {
       "horseIndex": 0,
       "runnerNumber": 4,
-      "factors": { "courseForm": 0.7, "formDistance": 0.8, "jockeyTrainer": 0.9, "oddsMovement": 0.6, "history": 0.75, "overall": 0.77 },
+      "factors": { "courseForm": 0.7, "formDistance": 0.8, "jockeyTrainer": 0.9, "oddsMovement": 0.6, "history": 0.75, "fieldStrength": 0.63, "weightCarried": 0.58, "surfaceFit": 0.74, "paceProfile": 0.61, "priceValue": 0.57, "overall": 0.77 },
       "score": 0.77,
       "confidence": 0.72,
-      "aiSummary": "Strong course performer with a top jockey booking and shortening market."
+      "aiSummary": "Strong course performer with a top jockey booking."
     }
   ]
 }`;
@@ -350,19 +353,29 @@ export interface ChatWeightSuggestion {
   jockeyTrainer?: number;
   oddsMovement?: number;
   history?: number;
+  fieldStrength?: number;
+  weightCarried?: number;
+  surfaceFit?: number;
+  paceProfile?: number;
+  priceValue?: number;
 }
 
 export type ChatActionSuggestion =
   | { type: "sync" }
   | { type: "analyze"; scope: "focus" | "today" };
 
-const WEIGHT_KEYS = ["courseForm", "formDistance", "jockeyTrainer", "oddsMovement", "history"] as const;
+const WEIGHT_KEYS = ["courseForm", "formDistance", "jockeyTrainer", "oddsMovement", "history", "fieldStrength", "weightCarried", "surfaceFit", "paceProfile", "priceValue"] as const;
 const WEIGHT_LABELS: Array<{ key: keyof WeightConfig; patterns: RegExp[] }> = [
   { key: "courseForm", patterns: [/course\s*form/i, /course/i] },
   { key: "formDistance", patterns: [/form\s*(?:and|&)?\s*distance/i, /distance/i, /form/i] },
   { key: "jockeyTrainer", patterns: [/jockey\s*(?:and|&)?\s*trainer/i, /trainer\s*\/\s*jockey/i, /jockey/i, /trainer/i] },
   { key: "oddsMovement", patterns: [/odds\s*movement/i, /market/i, /odds/i] },
   { key: "history", patterns: [/history/i, /historical/i, /class/i] },
+  { key: "fieldStrength", patterns: [/field\s*strength/i, /field/i] },
+  { key: "weightCarried", patterns: [/weight\s*carried/i, /carried\s*weight/i, /allocated\s*weight/i] },
+  { key: "surfaceFit", patterns: [/surface\s*fit/i, /surface/i, /track\s*fit/i] },
+  { key: "paceProfile", patterns: [/pace\s*profile/i, /pace/i, /tempo/i] },
+  { key: "priceValue", patterns: [/price\s*value/i, /value/i, /betting\s*value/i] },
 ];
 
 function clamp(value: number, min: number, max: number): number {
@@ -376,6 +389,11 @@ function normalizeWeights(weights: WeightConfig): WeightConfig {
     jockeyTrainer: clamp(Number(weights.jockeyTrainer) || 0, 0.01, 0.8),
     oddsMovement: clamp(Number(weights.oddsMovement) || 0, 0.01, 0.8),
     history: clamp(Number(weights.history) || 0, 0.01, 0.8),
+    fieldStrength: clamp(Number(weights.fieldStrength) || 0, 0.01, 0.8),
+    weightCarried: clamp(Number(weights.weightCarried) || 0, 0.01, 0.8),
+    surfaceFit: clamp(Number(weights.surfaceFit) || 0, 0.01, 0.8),
+    paceProfile: clamp(Number(weights.paceProfile) || 0, 0.01, 0.8),
+    priceValue: clamp(Number(weights.priceValue) || 0, 0.01, 0.8),
   };
   const total = Object.values(sanitized).reduce((sum, value) => sum + value, 0);
   if (!Number.isFinite(total) || total <= 0) return weights;
@@ -386,12 +404,17 @@ function normalizeWeights(weights: WeightConfig): WeightConfig {
     jockeyTrainer: sanitized.jockeyTrainer / total,
     oddsMovement: sanitized.oddsMovement / total,
     history: sanitized.history / total,
+    fieldStrength: sanitized.fieldStrength / total,
+    weightCarried: sanitized.weightCarried / total,
+    surfaceFit: sanitized.surfaceFit / total,
+    paceProfile: sanitized.paceProfile / total,
+    priceValue: sanitized.priceValue / total,
   };
 }
 
 function buildSingleFactorAdjustment(currentWeights: WeightConfig, key: keyof WeightConfig, delta: number): WeightConfig {
   const next = { ...currentWeights };
-  next[key] = Math.min(0.6, Math.max(0.05, (next[key] ?? 0.1) + delta));
+  next[key] = Math.min(0.6, Math.max(0.05, next[key] + delta));
 
   const others = WEIGHT_KEYS.filter((candidate) => candidate !== key);
   const otherTotal = others.reduce((sum, candidate) => sum + currentWeights[candidate], 0);
@@ -407,7 +430,7 @@ function buildSingleFactorAdjustment(currentWeights: WeightConfig, key: keyof We
 
 function tryParseWeightSuggestions(message: string, currentWeights: WeightConfig): ChatWeightSuggestion | undefined {
   const text = message.trim();
-  if (!/weight/i.test(text) && !/course|distance|jockey|trainer|odds|history|market/i.test(text)) {
+  if (!/weight/i.test(text) && !/course|distance|jockey|trainer|odds|history|market|field|surface|pace|tempo|value/i.test(text)) {
     return undefined;
   }
 
@@ -427,13 +450,18 @@ function tryParseWeightSuggestions(message: string, currentWeights: WeightConfig
   }
 
   const orderedNumbers = [...text.matchAll(/(\d{1,3})(?:\s*%)/g)].map((match) => Number(match[1]) / 100);
-  if (/weights?/i.test(text) && orderedNumbers.length === 5) {
+  if (/weights?/i.test(text) && orderedNumbers.length === 10) {
     return normalizeWeights({
       courseForm: orderedNumbers[0],
       formDistance: orderedNumbers[1],
       jockeyTrainer: orderedNumbers[2],
       oddsMovement: orderedNumbers[3],
       history: orderedNumbers[4],
+      fieldStrength: orderedNumbers[5],
+      weightCarried: orderedNumbers[6],
+      surfaceFit: orderedNumbers[7],
+      paceProfile: orderedNumbers[8],
+      priceValue: orderedNumbers[9],
     });
   }
 
@@ -533,23 +561,23 @@ The live FORECAST CONTEXT below is the source of truth. If older chat history co
 - Best bet selection: Give a confident single best bet or each-way selection with clear reasoning
 - Jockey and trainer intelligence: Know which SA jockeys and trainers are in form and which partnerships fire
 - Odds reading: Interpret market moves - shortening horses show market confidence, drifters suggest trouble
-- Weight adjustment: Optimise all 10 prediction factors (5 AI-scored + 5 data-computed) for the card conditions
+- Weight adjustment: Optimise the full 10-factor prediction mix for the card conditions
 - Scratch impact: Assess how a scratch affects the remaining field and revise selections
 - Weekly planning: Compare today's card with the next 7 days and explain where confidence is strongest
 - Model review: Mention recent hits or misses when that changes how aggressive the advice should be
 - App control: When the user explicitly tells you to sync or analyze, request the action using the control tag below
 
 ## CURRENT PREDICTION WEIGHTS
-- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% — venue suitability
-- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% — recent runs plus trip suitability
-- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% — booking strength and partnership
-- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% — market intelligence
-- History: ${(currentWeights.history * 100).toFixed(0)}% — class and historical level
-- Field Strength: ${((currentWeights.fieldStrength ?? 0.10) * 100).toFixed(0)}% — relative quality of the opposition
-- Weight Carried: ${((currentWeights.weightCarried ?? 0.05) * 100).toFixed(0)}% — weight advantage/penalty vs rivals
-- Surface Fit: ${((currentWeights.surfaceFit ?? 0.03) * 100).toFixed(0)}% — turf/all-weather preference match
-- Pace Profile: ${((currentWeights.paceProfile ?? 0.02) * 100).toFixed(0)}% — racing style vs distance suitability
-- Price Value: ${((currentWeights.priceValue ?? 0.01) * 100).toFixed(0)}% — value edge vs market implied probability
+- Course Form: ${(currentWeights.courseForm * 100).toFixed(0)}% - venue suitability
+- Form & Distance: ${(currentWeights.formDistance * 100).toFixed(0)}% - recent runs plus trip suitability
+- Jockey/Trainer: ${(currentWeights.jockeyTrainer * 100).toFixed(0)}% - booking strength and partnership
+- Odds Movement: ${(currentWeights.oddsMovement * 100).toFixed(0)}% - market intelligence
+- History: ${(currentWeights.history * 100).toFixed(0)}% - class and historical level
+- Field Strength: ${(currentWeights.fieldStrength * 100).toFixed(0)}% - quality of opposition handled
+- Weight Carried: ${(currentWeights.weightCarried * 100).toFixed(0)}% - today's handicap burden
+- Surface Fit: ${(currentWeights.surfaceFit * 100).toFixed(0)}% - surface suitability
+- Pace Profile: ${(currentWeights.paceProfile * 100).toFixed(0)}% - likely race tempo fit
+- Price Value: ${(currentWeights.priceValue * 100).toFixed(0)}% - value versus the market price
 
 ## FORECAST CONTEXT
 ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on the Dashboard."}
@@ -569,10 +597,8 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - Use SA racing terminology: "the favourite", "each-way", "trifecta", "the rail", "outside draw"
 
 ## WEIGHT ADJUSTMENT
-When you recommend changing weights, append this block (and ONLY when actually changing them).
-The 5 original factors (courseForm, formDistance, jockeyTrainer, oddsMovement, history) are AI-scored.
-The 5 new factors (fieldStrength, weightCarried, surfaceFit, paceProfile, priceValue) are data-computed.
-<weights>{"courseForm": 0.20, "formDistance": 0.20, "jockeyTrainer": 0.15, "oddsMovement": 0.12, "history": 0.12, "fieldStrength": 0.10, "weightCarried": 0.05, "surfaceFit": 0.03, "paceProfile": 0.02, "priceValue": 0.01}</weights>
+When you recommend changing weights, append this block (and ONLY when actually changing them):
+<weights>{"courseForm": 0.18, "formDistance": 0.18, "jockeyTrainer": 0.14, "oddsMovement": 0.10, "history": 0.10, "fieldStrength": 0.08, "weightCarried": 0.07, "surfaceFit": 0.06, "paceProfile": 0.05, "priceValue": 0.04}</weights>
 Weights must sum to exactly 1.0.
 
 ## APP ACTION TAGS

@@ -96,6 +96,11 @@ export type LearningPerformanceSummary = {
     jockeyTrainer: number;
     oddsMovement: number;
     history: number;
+    fieldStrength: number;
+    weightCarried: number;
+    surfaceFit: number;
+    paceProfile: number;
+    priceValue: number;
   };
   strongestEdge: string | null;
   recentResults: Array<{
@@ -323,6 +328,11 @@ function strongestEdge(row: LearningRow | undefined): string | null {
     jockeyTrainer: "Jockey and trainer",
     oddsMovement: "Odds movement",
     history: "History",
+    fieldStrength: "Field strength",
+    weightCarried: "Weight carried",
+    surfaceFit: "Surface fit",
+    paceProfile: "Pace profile",
+    priceValue: "Price value",
   };
 
   return `${labels[best[0]] ?? best[0]} ${best[1] > 0 ? "running hot" : "needs caution"}`;
@@ -361,6 +371,11 @@ export async function getLearningPerformanceSummary(): Promise<LearningPerforman
       jockeyTrainer: 0,
       oddsMovement: 0,
       history: 0,
+      fieldStrength: 0,
+      weightCarried: 0,
+      surfaceFit: 0,
+      paceProfile: 0,
+      priceValue: 0,
     },
     strongestEdge: strongestEdge(learning),
     recentResults: recentResults.map((result) => {
