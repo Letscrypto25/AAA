@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "preinstall": "node -e \"const fs = require('fs'); ['package-lock.json', 'yarn.lock'].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f) }); if (!process.env.npm_config_user_agent || !process.env.npm_config_user_agent.startsWith('pnpm/')) { console.error('Use pnpm instead'); process.exit(1); }\"",
+    "preinstall": "node -e \"const fs = require('fs'); ['package-lock.json', 'yarn.lock'].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f) }); const isCi = process.env.CI === 'true' || !!process.env.RAILWAY_ENVIRONMENT || process.env.RAILPACK === 'true'; if (!isCi && (!process.env.npm_config_user_agent || !process.env.npm_config_user_agent.startsWith('pnpm/'))) { console.error('Use pnpm instead'); process.exit(1); }\"",
     "pnpm": "corepack pnpm",
     "dev": "corepack pnpm --parallel --filter @workspace/api-server --filter @workspace/aaa-bets run dev",
     "dev:api": "corepack pnpm --filter @workspace/api-server run dev",
