@@ -5,7 +5,7 @@ import { formatRunnerForm, parseDecimalOdds, parseDistanceMeters, parseRaceTime 
 const DEFAULT_THERACING_API_BASE_URL = "https://api.theracingapi.com";
 const REQUEST_TIMEOUT_MS = 15000;
 
-export type RaceSyncSource = "theracingapi" | "tote";
+export type RaceSyncSource = "theracingapi" | "tote" | "gallop";
 export type NormalizedRaceStatus = "upcoming" | "completed" | "cancelled";
 export type TheRacingApiPlan = "pro" | "standard";
 
