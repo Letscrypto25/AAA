@@ -134,25 +134,29 @@ function pickArray(record: JsonRecord, ...paths: Array<readonly string[]>): unkn
   return [];
 }
 
+function cleanEnvValue(value?: string): string {
+  return (value || "").trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+}
+
 function parseCsvEnv(value?: string): string[] {
-  return (value || "")
+  return cleanEnvValue(value)
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
 function getTheRacingApiConfig(): TheRacingApiConfig | null {
-  const username = process.env["THERACING_API_USERNAME"]?.trim();
-  const password = process.env["THERACING_API_PASSWORD"]?.trim();
+  const username = cleanEnvValue(process.env["THERACING_API_USERNAME"]);
+  const password = cleanEnvValue(process.env["THERACING_API_PASSWORD"]);
   if (!username || !password) return null;
 
-  const planValue = (process.env["THERACING_API_PLAN"] || "pro").trim().toLowerCase();
+  const planValue = cleanEnvValue(process.env["THERACING_API_PLAN"] || "pro").toLowerCase();
   const plan: TheRacingApiPlan = planValue === "standard" ? "standard" : "pro";
 
   return {
     username,
     password,
-    baseUrl: (process.env["THERACING_API_BASE_URL"] || DEFAULT_THERACING_API_BASE_URL).trim().replace(/\/+$/, ""),
+    baseUrl: cleanEnvValue(process.env["THERACING_API_BASE_URL"] || DEFAULT_THERACING_API_BASE_URL).replace(/\/+$/, ""),
     plan,
     regionCodes: parseCsvEnv(process.env["THERACING_API_REGION_CODES"]),
     courseIds: parseCsvEnv(process.env["THERACING_API_COURSE_IDS"]),
