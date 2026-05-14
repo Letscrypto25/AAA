@@ -458,22 +458,25 @@ async function syncOfficialResult(raceId: number, card: NormalizedRaceCard): Pro
 }
 
 async function syncRaceCard(card: NormalizedRaceCard, existingRaceId?: number): Promise<{ created: boolean }> {
+  const { race, created } = await upsertRace(card, existingRaceId);
+
   if (!hasLiveCard(card)) {
-    const existingRace = existingRaceId ? await loadRaceById(existingRaceId) : await findRace(card);
-    if (existingRace) {
-      const existingHorses = await db.select({ id: horsesTable.id }).from(horsesTable).where(eq(horsesTable.raceId, existingRace.id)).limit(1);
-      if (existingHorses.length === 0) {
-        await db.delete(racesTable).where(eq(racesTable.id, existingRace.id));
-        logger.info(
-          { raceId: existingRace.id, venue: existingRace.venue, raceNumber: existingRace.raceNumber, source: card.source },
-          "Removed empty shell race",
-        );
-      }
-    }
-    return { created: false };
+    await db
+      .update(racesTable)
+      .set({
+        status: card.status === "cancelled" ? "cancelled" : race.status,
+        nextUpdateAt: card.status === "cancelled" ? null : getNextUpdateTime(race.raceTime, race.meetingDate),
+        syncedFrom: card.source,
+      })
+      .where(eq(racesTable.id, race.id));
+
+    logger.info(
+      { raceId: race.id, venue: race.venue, raceNumber: race.raceNumber, source: card.source },
+      "Stored shell racecard schedule while waiting for detailed runner data",
+    );
+    return { created };
   }
 
-  const { race, created } = await upsertRace(card, existingRaceId);
   await syncRaceHorses(race.id, card);
   const resultOutcome = await syncOfficialResult(race.id, card);
   const syncedState = getSyncedRaceStatus(race, card, resultOutcome);
@@ -578,7 +581,12 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
         };
       }
 
-      logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; falling back to The Racing API or Tote");
+      logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; using shell schedule instead of noisy fallback");
+      return {
+        source: "gallop",
+        cards: mergedCards,
+        meetingsFound: countMeetings(mergedCards),
+      };
     } else if (gallopResult.listedMeetings === 0) {
       return { source: "gallop", cards: [], meetingsFound: 0 };
     }
