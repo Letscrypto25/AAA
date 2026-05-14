@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startScheduler, startSyncScheduler, setAnalyzeCallback, setRefreshOddsCallback, setSyncCallback } from "./lib/scheduler";
 import { syncTodaysMeetings, refreshRaceOdds } from "./lib/raceSync";
 import { db, predictionWeightsTable, learningFeedbackTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { runRaceForecast } from "./lib/forecasting";
 
 const rawPort = process.env["PORT"];
@@ -35,7 +36,11 @@ app.listen(port, async (err) => {
     logger.info("Default prediction weights seeded");
   }
 
-  const existingLearning = await db.select().from(learningFeedbackTable).limit(1);
+  const existingLearning = await db
+    .select()
+    .from(learningFeedbackTable)
+    .where(eq(learningFeedbackTable.scope, "global"))
+    .limit(1);
   if (existingLearning.length === 0) {
     await db.insert(learningFeedbackTable).values({
       scope: "global",
