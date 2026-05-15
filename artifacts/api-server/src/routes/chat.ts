@@ -259,7 +259,7 @@ function inferFocusRaceId(message: string, cards: ForecastCard[], explicitRaceId
 
 async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId?: number): Promise<string> {
   const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
-  const cards = (await buildRaceForecastCards(allRaces)).filter((card) => card.horseCount > 0 || !!card.result);
+  const cards = (await buildRaceForecastCards(allRaces)).filter((card) => isRaceLiveCard(card) || card.horseCount > 0 || !!card.result);
   const performance = await getLearningPerformanceSummary();
   const syncStatus = await getLastSyncStatus();
   const allHorses = await db.select().from(horsesTable);

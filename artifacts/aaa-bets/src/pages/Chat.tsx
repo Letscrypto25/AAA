@@ -93,10 +93,10 @@ export default function Chat() {
 
   const allMessages = [...(history ?? []), ...optimisticMessages];
   const usableRaces = [
-    ...sortLiveRaceCards((races ?? []).filter((race) => (race.horseCount > 0 || !!race.topPrediction || !!race.result) && isLiveRaceCard(race))),
-    ...sortHistoryRaceCards((races ?? []).filter((race) => (race.horseCount > 0 || !!race.topPrediction || !!race.result) && isHistoryRaceCard(race))),
+    ...sortLiveRaceCards((races ?? []).filter((race) => isLiveRaceCard(race))),
+    ...sortHistoryRaceCards((races ?? []).filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result))),
   ];
-  const summaryTodayCards = (summary?.todayCards ?? []).filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
+  const summaryTodayCards = summary?.todayCards ?? [];
   const todayRaces = summaryTodayCards.length > 0
     ? summaryTodayCards
     : usableRaces.filter((r) => r.status === "upcoming" || r.status === "analyzing");

@@ -337,14 +337,16 @@ function AddRaceModal({ onClose }: { onClose: () => void }) {
 export default function Races() {
   const { data: raceResponse, isLoading } = useGetRaces();
   const races = (raceResponse ?? []) as RaceCard[];
-  const usableRaces = races.filter((race) => race.horseCount > 0 || !!race.topPrediction || !!race.result);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<RaceFilter>("all");
   const [viewMode, setViewMode] = useState<RaceViewMode>("live");
   const [showAdd, setShowAdd] = useState(false);
 
-  const liveRaces = useMemo(() => sortLiveRaceCards(usableRaces.filter(isLiveRaceCard)), [usableRaces]);
-  const historyRaces = useMemo(() => sortHistoryRaceCards(usableRaces.filter(isHistoryRaceCard)), [usableRaces]);
+  const liveRaces = useMemo(() => sortLiveRaceCards(races.filter(isLiveRaceCard)), [races]);
+  const historyRaces = useMemo(
+    () => sortHistoryRaceCards(races.filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result))),
+    [races],
+  );
 
   const filtered = useMemo(() => {
     const source = viewMode === "live" ? liveRaces : historyRaces;
