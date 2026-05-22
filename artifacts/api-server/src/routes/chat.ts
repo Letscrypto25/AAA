@@ -11,8 +11,10 @@ import { desc } from "drizzle-orm";
 import { SendChatMessageBody } from "@workspace/api-zod";
 import {
   chatWithAI,
+  inferBetTypeFromText,
   inferChatControlsFromMessage,
   type ChatActionSuggestion,
+  type ChatBetType,
   type ChatWeightSuggestion,
 } from "../lib/groq";
 import { runRaceForecast } from "../lib/forecasting";
@@ -129,6 +131,216 @@ function isSkippableAnalysisError(message: string): boolean {
 }
 
 type ForecastCard = Awaited<ReturnType<typeof buildRaceForecastCards>>[number];
+type RankedBetOpportunity = { title: string; detail: string; score: number };
+
+const DEFAULT_BET_TYPE: ChatBetType = "win";
+const BET_TYPE_LABELS: Record<ChatBetType, string> = {
+  win: "Win",
+  place: "Place",
+  exacta: "Exacta",
+  trifecta: "Trifecta",
+  pick3: "Pick 3",
+};
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function formatPercent(value?: number | null): string {
+  return value == null ? "n/a" : `${Math.round(value * 100)}%`;
+}
+
+function resolveBetType(value: unknown, message: string): ChatBetType {
+  if (value === "win" || value === "place" || value === "exacta" || value === "trifecta" || value === "pick3") {
+    return value;
+  }
+  return inferBetTypeFromText(message) ?? DEFAULT_BET_TYPE;
+}
+
+function getPredictionGap(card: ForecastCard, leftIndex: number, rightIndex: number): number {
+  const left = card.topPredictions[leftIndex];
+  const right = card.topPredictions[rightIndex];
+  if (!left || !right) return 0;
+  return clampNumber((left.confidence - right.confidence) + (left.score - right.score) * 0.35, -1, 1);
+}
+
+function getRaceAnchorStrength(card: ForecastCard): number {
+  const top = card.topPredictions[0];
+  if (!top) return 0;
+  return clampNumber(
+    top.confidence * 0.52 + top.score * 0.3 + Math.max(0, getPredictionGap(card, 0, 1)) * 0.28,
+    0,
+    1,
+  );
+}
+
+function getRacePlaceStrength(card: ForecastCard): number {
+  const top = card.topPredictions[0];
+  if (!top) return 0;
+  const topThree = card.topPredictions.slice(0, 3);
+  const averageConfidence = topThree.reduce((sum, prediction) => sum + prediction.confidence, 0) / Math.max(topThree.length, 1);
+  return clampNumber(
+    top.confidence * 0.42 + top.score * 0.24 + averageConfidence * 0.22 + Math.max(0, getPredictionGap(card, 0, 2)) * 0.22,
+    0,
+    1,
+  );
+}
+
+function getRacePairStrength(card: ForecastCard): number {
+  const first = card.topPredictions[0];
+  const second = card.topPredictions[1];
+  if (!first || !second) return 0;
+  const thirdGap = Math.max(0, getPredictionGap(card, 1, 2));
+  return clampNumber(
+    ((first.confidence + second.confidence) / 2) * 0.4
+      + ((first.score + second.score) / 2) * 0.28
+      + Math.max(0, getPredictionGap(card, 0, 1)) * 0.12
+      + thirdGap * 0.34,
+    0,
+    1,
+  );
+}
+
+function getRaceTrioStrength(card: ForecastCard): number {
+  const first = card.topPredictions[0];
+  const second = card.topPredictions[1];
+  const third = card.topPredictions[2];
+  if (!first || !second || !third) return 0;
+  const averageConfidence = (first.confidence + second.confidence + third.confidence) / 3;
+  const fourthGap = Math.max(0, getPredictionGap(card, 2, 3));
+  return clampNumber(
+    averageConfidence * 0.42
+      + ((first.score + second.score + third.score) / 3) * 0.25
+      + Math.max(0, getPredictionGap(card, 0, 1)) * 0.1
+      + Math.max(0, getPredictionGap(card, 1, 2)) * 0.1
+      + fourthGap * 0.28,
+    0,
+    1,
+  );
+}
+
+function buildRaceBetOpportunities(
+  cards: ForecastCard[],
+  betType: Exclude<ChatBetType, "pick3">,
+  focusRaceId?: number,
+): RankedBetOpportunity[] {
+  return cards
+    .filter((card) => isRaceLiveCard(card) && card.topPrediction)
+    .map((card) => {
+      const first = card.topPredictions[0];
+      const second = card.topPredictions[1];
+      const third = card.topPredictions[2];
+      if (!first) return null;
+
+      let score = 0;
+      let detail = "";
+
+      if (betType === "win") {
+        score = getRaceAnchorStrength(card);
+        detail = `${first.horseName} straight win - ${formatPercent(first.confidence)} lead, gap ${formatPercent(Math.max(0, getPredictionGap(card, 0, 1)))} over the next pick.`;
+      } else if (betType === "place") {
+        score = getRacePlaceStrength(card);
+        detail = `${first.horseName} for a place - ${formatPercent(first.confidence)} top line with ${card.topPredictions.length >= 3 ? `${formatPercent((card.topPredictions[0].confidence + (second?.confidence ?? 0) + (third?.confidence ?? 0)) / 3)} top-3 stability.` : "solid coverage."}`;
+      } else if (betType === "exacta") {
+        if (!second) return null;
+        score = getRacePairStrength(card);
+        detail = `${first.horseName} -> ${second.horseName}${third ? `, with ${third.horseName} the main spoiler.` : "."}`;
+      } else {
+        if (!second || !third) return null;
+        score = getRaceTrioStrength(card);
+        detail = `${first.horseName} -> ${second.horseName} -> ${third.horseName} - strongest current ordered trio.`;
+      }
+
+      if (focusRaceId && card.id === focusRaceId) {
+        score = clampNumber(score + 0.04, 0, 1);
+      }
+
+      return {
+        title: `Race ${card.raceNumber} ${card.name}`,
+        detail,
+        score,
+      };
+    })
+    .filter((entry): entry is RankedBetOpportunity => Boolean(entry))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4);
+}
+
+function buildPick3Opportunities(cards: ForecastCard[]): RankedBetOpportunity[] {
+  const sequenceCards = cards
+    .filter((card) => card.isToday && isRaceLiveCard(card) && card.topPrediction)
+    .sort((left, right) => {
+      return left.raceTime.localeCompare(right.raceTime)
+        || left.raceNumber - right.raceNumber
+        || left.venue.localeCompare(right.venue);
+    });
+
+  if (sequenceCards.length < 3) return [];
+
+  const windows: RankedBetOpportunity[] = [];
+  for (let index = 0; index <= sequenceCards.length - 3; index += 1) {
+    const legs = sequenceCards.slice(index, index + 3);
+    const legScores = legs.map((card) => getRaceAnchorStrength(card));
+    const averageScore = legScores.reduce((sum, value) => sum + value, 0) / legScores.length;
+    const minScore = Math.min(...legScores);
+    const scoreRange = Math.max(...legScores) - minScore;
+    const score = clampNumber(averageScore * 0.7 + minScore * 0.24 - scoreRange * 0.16, 0, 1);
+    const detail = legs
+      .map((card) => {
+        const top = card.topPrediction;
+        return `R${card.raceNumber} ${top?.horseName ?? "pending"} ${formatPercent(top?.confidence)}`;
+      })
+      .join(" | ");
+
+    windows.push({
+      title: `${legs[0].venue} sequence from Race ${legs[0].raceNumber} to Race ${legs[2].raceNumber}`,
+      detail,
+      score,
+    });
+  }
+
+  return windows.sort((left, right) => right.score - left.score).slice(0, 3);
+}
+
+function getBetTypeLensLine(betType: ChatBetType): string {
+  switch (betType) {
+    case "win":
+      return "BETTING LENS: prefer the cleanest single winner with a real edge over the next horse.";
+    case "place":
+      return "BETTING LENS: prefer reliable runners that can finish in the money even if the race shape gets messy.";
+    case "exacta":
+      return "BETTING LENS: prefer races where the top two look clearly stronger than the rest for an ordered first-second ticket.";
+    case "trifecta":
+      return "BETTING LENS: prefer races with a stable top three and a clear drop to the fourth horse.";
+    case "pick3":
+      return "BETTING LENS: prefer balanced three-leg sequences across today's card, not just one standout anchor.";
+    default:
+      return "BETTING LENS: use the active bet type to shape the answer.";
+  }
+}
+
+function buildBetTypeBriefing(cards: ForecastCard[], betType: ChatBetType, focusRaceId?: number): string[] {
+  const lines = [
+    `ACTIVE BET TYPE: ${BET_TYPE_LABELS[betType]}`,
+    getBetTypeLensLine(betType),
+  ];
+
+  const opportunities = betType === "pick3"
+    ? buildPick3Opportunities(cards)
+    : buildRaceBetOpportunities(cards, betType, focusRaceId);
+
+  if (opportunities.length === 0) {
+    lines.push("BETTING LENS STATUS: not enough forecasted races are loaded yet for this bet type.");
+    return lines;
+  }
+
+  lines.push("BEST CURRENT BET ANGLES:");
+  for (const opportunity of opportunities) {
+    lines.push(`- ${opportunity.title} | fit ${formatPercent(opportunity.score)} | ${opportunity.detail}`);
+  }
+
+  return lines;
+}
 
 function normalizeText(value: string): string {
   return value
@@ -257,7 +469,11 @@ function inferFocusRaceId(message: string, cards: ForecastCard[], explicitRaceId
   return bestScore >= minimumScore && bestMatches.length === 1 ? bestMatches[0] : undefined;
 }
 
-async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId?: number): Promise<string> {
+async function buildForecastBriefing(
+  currentWeights: WeightSnapshot,
+  focusRaceId?: number,
+  betType: ChatBetType = DEFAULT_BET_TYPE,
+): Promise<string> {
   const allRaces = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
   const cards = (await buildRaceForecastCards(allRaces)).filter((card) => isRaceLiveCard(card) || card.horseCount > 0 || !!card.result);
   const performance = await getLearningPerformanceSummary();
@@ -315,6 +531,7 @@ async function buildForecastBriefing(currentWeights: WeightSnapshot, focusRaceId
         .join(" | ")}`,
     );
   }
+  lines.push(...buildBetTypeBriefing(cards, betType, focusRaceId));
   lines.push("AVAILABLE ACTIONS: sync the live card, analyze the focused race, analyze today's live races, update weights.");
   lines.push("");
 
@@ -533,6 +750,7 @@ router.post("/chat", async (req, res): Promise<void> => {
   }
 
   const { message, raceId } = body.data;
+  const selectedBetType = resolveBetType(body.data.betType, message);
 
   let [weights] = await db.select().from(predictionWeightsTable).limit(1);
   if (!weights) {
@@ -569,7 +787,7 @@ router.post("/chat", async (req, res): Promise<void> => {
     await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime),
   );
   const resolvedRaceId = inferFocusRaceId(message, focusCards, raceId ?? undefined);
-  const raceDayBriefing = await buildForecastBriefing(currentWeights, resolvedRaceId);
+  const raceDayBriefing = await buildForecastBriefing(currentWeights, resolvedRaceId, selectedBetType);
 
   await db.insert(chatMessagesTable).values({
     role: "user",
@@ -584,7 +802,14 @@ router.post("/chat", async (req, res): Promise<void> => {
   };
 
   try {
-    aiResult = await chatWithAI(message, currentWeights, history, raceDayBriefing, Boolean(resolvedRaceId));
+    aiResult = await chatWithAI(
+      message,
+      currentWeights,
+      history,
+      raceDayBriefing,
+      Boolean(resolvedRaceId),
+      selectedBetType,
+    );
   } catch {
     const inferred = inferChatControlsFromMessage(message, currentWeights, Boolean(resolvedRaceId));
     aiResult = {
@@ -639,6 +864,7 @@ router.post("/chat", async (req, res): Promise<void> => {
 
   res.json({
     message: finalReply,
+    selectedBetType,
     updatedWeights,
     triggeredAnalysis,
     actionResults,

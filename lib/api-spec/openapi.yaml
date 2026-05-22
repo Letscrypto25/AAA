@@ -746,8 +746,16 @@ components:
           type: string
         raceId:
           type: ["integer", "null"]
+        betType:
+          anyOf:
+            - $ref: "#/components/schemas/BetTypeChoice"
+            - type: "null"
       required:
         - message
+
+    BetTypeChoice:
+      type: string
+      enum: [win, place, exacta, trifecta, pick3]
 
     ChatMessage:
       type: object
@@ -769,19 +777,45 @@ components:
         - content
         - createdAt
 
+    ChatActionResult:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [sync, analyze_focus, analyze_today]
+        status:
+          type: string
+          enum: [executed, skipped, failed]
+        label:
+          type: string
+        detail:
+          type: string
+      required:
+        - type
+        - status
+        - label
+        - detail
+
     ChatResponse:
       type: object
       properties:
         message:
           type: string
+        selectedBetType:
+          $ref: "#/components/schemas/BetTypeChoice"
         updatedWeights:
           anyOf:
             - $ref: "#/components/schemas/PredictionWeights"
             - type: "null"
         triggeredAnalysis:
           type: boolean
+        actionResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatActionResult"
       required:
         - message
+        - selectedBetType
         - triggeredAnalysis
 
     PerformanceResultSummary:
