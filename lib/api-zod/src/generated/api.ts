@@ -489,10 +489,17 @@ export const UpdateWeightsResponse = zod.object({
 export const SendChatMessageBody = zod.object({
   message: zod.string(),
   raceId: zod.number().nullish(),
+  betType: zod
+    .union([
+      zod.enum(["win", "place", "exacta", "trifecta", "pick3"]),
+      zod.null(),
+    ])
+    .optional(),
 });
 
 export const SendChatMessageResponse = zod.object({
   message: zod.string(),
+  selectedBetType: zod.enum(["win", "place", "exacta", "trifecta", "pick3"]),
   updatedWeights: zod
     .union([
       zod.object({
@@ -513,6 +520,16 @@ export const SendChatMessageResponse = zod.object({
     ])
     .optional(),
   triggeredAnalysis: zod.boolean(),
+  actionResults: zod
+    .array(
+      zod.object({
+        type: zod.enum(["sync", "analyze_focus", "analyze_today"]),
+        status: zod.enum(["executed", "skipped", "failed"]),
+        label: zod.string(),
+        detail: zod.string(),
+      }),
+    )
+    .optional(),
 });
 
 /**

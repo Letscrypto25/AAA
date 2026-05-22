@@ -382,6 +382,31 @@ function blendFactorValue(aiValue: number, fallbackValue: number, aiWeight: numb
   return round(clamp(aiValue * aiWeight + fallbackValue * (1 - aiWeight), 0, 1));
 }
 
+function averageFactorGap(
+  aiFactors: PredictionFactorBreakdown,
+  fallbackFactors: PredictionFactorBreakdown,
+): number {
+  const totalGap = FACTOR_KEYS.reduce((sum, key) => {
+    return sum + Math.abs((aiFactors[key] ?? 0.5) - (fallbackFactors[key] ?? 0.5));
+  }, 0);
+
+  return totalGap / FACTOR_KEYS.length;
+}
+
+function resolveAiBlendWeight(
+  aiPrediction: HorsePrediction,
+  fallbackPrediction: HorsePrediction,
+  aiFactors: PredictionFactorBreakdown,
+  fallbackFactors: PredictionFactorBreakdown,
+): number {
+  const scoreGap = Math.abs(clamp(aiPrediction.score, 0, 1) - clamp(fallbackPrediction.score, 0, 1));
+  const confidenceGap = Math.abs(clamp(aiPrediction.confidence, 0.12, 0.88) - clamp(fallbackPrediction.confidence, 0.12, 0.88));
+  const factorGap = averageFactorGap(aiFactors, fallbackFactors);
+  const agreement = clamp(1 - scoreGap * 2.1 - confidenceGap * 1.2 - factorGap * 1.1, 0, 1);
+  const summaryBonus = aiPrediction.aiSummary?.trim() ? 0.03 : 0;
+  return clamp(0.42 + agreement * 0.2 + summaryBonus, 0.42, 0.65);
+}
+
 function mergeModelPredictions(
   aiPredictions: HorsePrediction[],
   fallbackPredictions: HorsePrediction[],
@@ -405,7 +430,7 @@ function mergeModelPredictions(
 
     const aiFactors = sanitizeFactorBreakdown(aiPrediction.factors as PredictionFactorBreakdown, aiPrediction.score);
     const fallbackFactors = sanitizeFactorBreakdown(fallbackPrediction.factors as PredictionFactorBreakdown, fallbackPrediction.score);
-    const aiWeight = aiPrediction.aiSummary?.trim() ? 0.58 : 0.52;
+    const aiWeight = resolveAiBlendWeight(aiPrediction, fallbackPrediction, aiFactors, fallbackFactors);
     const blendedScore = clamp(
       clamp(aiPrediction.score, 0, 1) * aiWeight + clamp(fallbackPrediction.score, 0, 1) * (1 - aiWeight),
       0.08,
@@ -485,11 +510,11 @@ function decoratePredictions(
     const factorProfile = getFactorProfile(factors);
     const gapToNext = clamp(prediction.score - nextScore, 0, 0.25);
     const gapFromTop = clamp(topScore - prediction.score, 0, 0.35);
-    const adjustedScore = clamp(prediction.score + factorSignal * scoreWeight, 0.04, 0.99);
+    const modelScore = clamp(prediction.score, 0, 1);
     const rawConfidence = clamp(prediction.confidence, 0.12, 0.88);
     const structuralConfidence = clamp(
       0.18
-        + prediction.score * 0.24
+        + modelScore * 0.24
         + factorProfile.average * 0.18
         + factorProfile.consistency * 0.08
         + gapToNext * 0.62
@@ -500,6 +525,7 @@ function decoratePredictions(
       0.12,
       0.8,
     );
+    const adjustedScore = clamp(modelScore * 0.82 + structuralConfidence * 0.18 + factorSignal * scoreWeight, 0.04, 0.99);
     const baseConfidence = clamp(rawConfidence * 0.35 + structuralConfidence * 0.65, 0.12, 0.8);
     const conservativeCap = clamp(
       0.62

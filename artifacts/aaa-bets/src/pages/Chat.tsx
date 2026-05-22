@@ -1,11 +1,18 @@
-import { useState, useRef, useEffect } from "react";
-import { useGetChatHistory, useSendChatMessage, useGetRaces, useGetDashboardSummary } from "@workspace/api-client-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  getGetChatHistoryQueryKey,
+  getGetDashboardSummaryQueryKey,
+  getGetRacesQueryKey,
+  getGetWeightsQueryKey,
+  useGetChatHistory,
+  useGetDashboardSummary,
+  useGetRaces,
+  useSendChatMessage,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getGetChatHistoryQueryKey, getGetDashboardSummaryQueryKey, getGetRacesQueryKey, getGetWeightsQueryKey } from "@workspace/api-client-react";
-import { Bot, CalendarDays, Clock3, MessageSquare, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, User, Zap } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
+import { Bot, MessageSquare, Send, Settings2, TrendingUp, User, Zap } from "lucide-react";
 import { Link } from "wouter";
+import { cn } from "@/lib/utils";
 import {
   isHistoryRaceCard,
   isLiveRaceCard,
@@ -13,33 +20,7 @@ import {
   sortLiveRaceCards,
 } from "@/lib/race-board";
 
-function renderMessage(text: string) {
-  const lines = text.split("\n");
-  return lines.map((line, i) => {
-    const bold = line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    const isHeading = /^###?\s/.test(line);
-    const isBullet = /^[-•*]\s/.test(line);
-    const isNumbered = /^\d+\.\s/.test(line);
-    const clean = bold.replace(/^#{1,3}\s/, "").replace(/^[-•*]\s/, "").replace(/^\d+\.\s/, "");
-
-    if (isHeading) {
-      return (
-        <p key={i} className="font-semibold text-foreground mt-2 mb-0.5"
-          dangerouslySetInnerHTML={{ __html: clean }} />
-      );
-    }
-    if (isBullet || isNumbered) {
-      return (
-        <div key={i} className="flex gap-1.5 ml-1">
-          <span className="text-primary mt-0.5 shrink-0">{isNumbered ? line.match(/^\d+/)?.[0] + "." : "•"}</span>
-          <p dangerouslySetInnerHTML={{ __html: clean }} />
-        </div>
-      );
-    }
-    if (line.trim() === "") return <div key={i} className="h-2" />;
-    return <p key={i} dangerouslySetInnerHTML={{ __html: bold }} />;
-  });
-}
+type BetType = "win" | "place" | "exacta" | "trifecta" | "pick3";
 
 type WeightsUpdate = {
   courseForm: number;
@@ -66,18 +47,176 @@ type ChatMutationResult = {
   updatedWeights?: WeightsUpdate | null;
   actionResults?: ActionResult[];
   triggeredAnalysis?: boolean;
+  selectedBetType?: BetType;
 };
 
-function formatConfidence(value?: number | null) {
-  return value == null ? "Forecast pending" : `${Math.round(value * 100)}% confidence`;
+const BET_TYPE_OPTIONS: Array<{
+  value: BetType;
+  label: string;
+  shortLabel: string;
+  hint: string;
+}> = [
+  {
+    value: "win",
+    label: "Win",
+    shortLabel: "Win",
+    hint: "Single-runner edge for the cleanest straight bet.",
+  },
+  {
+    value: "place",
+    label: "Place",
+    shortLabel: "Place",
+    hint: "Safer runners that should finish in the money.",
+  },
+  {
+    value: "exacta",
+    label: "Exacta",
+    shortLabel: "Exacta",
+    hint: "Ordered first-second combinations with a clear pair.",
+  },
+  {
+    value: "trifecta",
+    label: "Trifecta",
+    shortLabel: "Trifecta",
+    hint: "Ordered top-three combinations when the race shape is clear.",
+  },
+  {
+    value: "pick3",
+    label: "Pick 3",
+    shortLabel: "Pick 3",
+    hint: "Three-leg sequences across today's best-linked races.",
+  },
+];
+
+function renderMessage(text: string) {
+  const lines = text.split("\n");
+  return lines.map((line, index) => {
+    const bold = line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    const isHeading = /^###?\s/.test(line);
+    const isBullet = /^[-*]\s/.test(line);
+    const isNumbered = /^\d+\.\s/.test(line);
+    const clean = bold.replace(/^#{1,3}\s/, "").replace(/^[-*]\s/, "").replace(/^\d+\.\s/, "");
+
+    if (isHeading) {
+      return (
+        <p
+          key={index}
+          className="mb-0.5 mt-2 font-semibold text-foreground"
+          dangerouslySetInnerHTML={{ __html: clean }}
+        />
+      );
+    }
+
+    if (isBullet || isNumbered) {
+      return (
+        <div key={index} className="ml-1 flex gap-1.5">
+          <span className="mt-0.5 shrink-0 text-primary">
+            {isNumbered ? `${line.match(/^\d+/)?.[0]}.` : "-"}
+          </span>
+          <p dangerouslySetInnerHTML={{ __html: clean }} />
+        </div>
+      );
+    }
+
+    if (line.trim() === "") {
+      return <div key={index} className="h-2" />;
+    }
+
+    return <p key={index} dangerouslySetInnerHTML={{ __html: bold }} />;
+  });
 }
 
 function formatRacePrompt(race: { raceNumber: number; name: string; venue: string }) {
   return `Race ${race.raceNumber} ${race.name} at ${race.venue}`;
 }
 
+function buildSuggestions(args: {
+  betType: BetType;
+  bestBetRace?: {
+    topPrediction?: { horseName: string } | null;
+  };
+  nextUpRace?: {
+    raceNumber: number;
+    name: string;
+    venue: string;
+  };
+  focusRace?: {
+    raceNumber: number;
+    name: string;
+    venue: string;
+    topPrediction?: { horseName: string } | null;
+  };
+  todayRaceCount: number;
+  weeklySpotlight?: string | null;
+  recentModelResult?: { topPickCorrect: boolean; raceName: string } | null;
+}) {
+  const {
+    betType,
+    bestBetRace,
+    nextUpRace,
+    focusRace,
+    todayRaceCount,
+    weeklySpotlight,
+    recentModelResult,
+  } = args;
+
+  const shared = [
+    "Analyze today's live races now",
+    "Sync the live card now",
+    "Increase weight on odds movement",
+  ];
+
+  if (betType === "win") {
+    return [
+      bestBetRace?.topPrediction ? `What is the best win bet today and why is ${bestBetRace.topPrediction.horseName} on top?` : null,
+      nextUpRace ? `Give me the cleanest win angle in ${formatRacePrompt(nextUpRace)}` : null,
+      focusRace?.topPrediction ? `Can ${focusRace.topPrediction.horseName} win ${formatRacePrompt(focusRace)} cleanly?` : null,
+      todayRaceCount > 0 ? `Which race has the clearest straight win edge from today's ${todayRaceCount} races?` : null,
+      ...shared,
+    ];
+  }
+
+  if (betType === "place") {
+    return [
+      focusRace ? `Which runner is safest for a place in ${formatRacePrompt(focusRace)}?` : null,
+      todayRaceCount > 0 ? `Which horse is the strongest place bet on today's card?` : null,
+      recentModelResult ? `Did the latest ${recentModelResult.topPickCorrect ? "hit" : "miss"} change which runners you trust for place bets?` : null,
+      "Show me the safest each-way angle today",
+      ...shared,
+    ];
+  }
+
+  if (betType === "exacta") {
+    return [
+      focusRace ? `Build the best exacta for ${formatRacePrompt(focusRace)}` : null,
+      nextUpRace ? `What is the strongest exacta in ${formatRacePrompt(nextUpRace)}?` : null,
+      "Which race has the clearest top-two exacta shape today?",
+      weeklySpotlight ? `Would you rather play exacta structure on ${weeklySpotlight} or today's live card?` : null,
+      ...shared,
+    ];
+  }
+
+  if (betType === "trifecta") {
+    return [
+      focusRace ? `Build the best trifecta for ${formatRacePrompt(focusRace)}` : null,
+      "Which race has the clearest ordered top three for a trifecta today?",
+      "Should the trifecta be boxed or kept in order?",
+      recentModelResult ? `What did the latest ${recentModelResult.topPickCorrect ? "result" : "miss"} teach the model about top-three structure?` : null,
+      ...shared,
+    ];
+  }
+
+  return [
+    "Build the strongest Pick 3 sequence on today's card",
+    nextUpRace ? `Start a Pick 3 from ${formatRacePrompt(nextUpRace)}` : null,
+    "Which three races link best for a Pick 3 today?",
+    weeklySpotlight ? `Is there a stronger Pick 3 path later this week around ${weeklySpotlight}?` : null,
+    ...shared,
+  ];
+}
+
 export default function Chat() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data: history, isLoading } = useGetChatHistory();
   const { data: races } = useGetRaces();
   const { data: summary } = useGetDashboardSummary();
@@ -85,21 +224,23 @@ export default function Chat() {
 
   const [input, setInput] = useState("");
   const [selectedRaceId, setSelectedRaceId] = useState<number | undefined>();
+  const [selectedBetType, setSelectedBetType] = useState<BetType>("win");
   const [optimisticMessages, setOptimisticMessages] = useState<Array<{ role: string; content: string; id: number }>>([]);
   const [lastWeightsUpdate, setLastWeightsUpdate] = useState<WeightsUpdate | null>(null);
   const [lastActionResults, setLastActionResults] = useState<ActionResult[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const allMessages = [...(history ?? []), ...optimisticMessages];
   const usableRaces = [
     ...sortLiveRaceCards((races ?? []).filter((race) => isLiveRaceCard(race))),
-    ...sortHistoryRaceCards((races ?? []).filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result))),
+    ...sortHistoryRaceCards(
+      (races ?? []).filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
+    ),
   ];
   const summaryTodayCards = summary?.todayCards ?? [];
   const todayRaces = summaryTodayCards.length > 0
     ? summaryTodayCards
-    : usableRaces.filter((r) => r.status === "upcoming" || r.status === "analyzing");
+    : usableRaces.filter((race) => race.status === "upcoming" || race.status === "analyzing");
   const weeklyOverview = summary?.weeklyOverview ?? [];
   const performance = summary?.performance;
   const focusRace = usableRaces.find((race) => race.id === selectedRaceId)
@@ -118,108 +259,136 @@ export default function Chat() {
       if (confidenceGap !== 0) return confidenceGap;
       return (right.prominence ?? 0) - (left.prominence ?? 0);
     })[0];
-  const recentModelResult = performance?.recentResults?.[0];
+  const recentModelResult = performance?.recentResults?.[0] ?? null;
+  const selectedBetMeta = BET_TYPE_OPTIONS.find((option) => option.value === selectedBetType) ?? BET_TYPE_OPTIONS[0];
+  const dynamicSuggestions = buildSuggestions({
+    betType: selectedBetType,
+    bestBetRace,
+    nextUpRace,
+    focusRace,
+    todayRaceCount: todayRaces.length,
+    weeklySpotlight: weeklyOverview[0]?.spotlightRaceName ?? null,
+    recentModelResult,
+  }).filter((value): value is string => Boolean(value));
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [allMessages.length, sendMessage.isPending]);
 
   const handleSend = async () => {
-    const msg = input.trim();
-    if (!msg || sendMessage.isPending) return;
+    const message = input.trim();
+    if (!message || sendMessage.isPending) return;
 
     setInput("");
     const tempId = Date.now();
-    setOptimisticMessages((prev) => [...prev, { role: "user", content: msg, id: tempId }]);
+    setOptimisticMessages((prev) => [...prev, { role: "user", content: message, id: tempId }]);
 
     try {
       const result = await sendMessage.mutateAsync({
-        data: { message: msg, raceId: selectedRaceId },
+        data: { message, raceId: selectedRaceId, betType: selectedBetType },
       }) as ChatMutationResult;
+
+      if (result.selectedBetType) {
+        setSelectedBetType(result.selectedBetType);
+      }
+
       if (result.updatedWeights) {
         setLastWeightsUpdate(result.updatedWeights);
-        await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
-        await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
-        await qc.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
       }
+
       if (result.actionResults?.length) {
         setLastActionResults(result.actionResults);
       }
+
       if (result.updatedWeights || result.actionResults?.some((action) => action.status === "executed")) {
-        await qc.invalidateQueries({ queryKey: getGetRacesQueryKey() });
-        await qc.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
-        await qc.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetWeightsQueryKey() });
+        await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
       }
-      await qc.invalidateQueries({ queryKey: getGetChatHistoryQueryKey() });
+
+      await queryClient.invalidateQueries({ queryKey: getGetChatHistoryQueryKey() });
       setOptimisticMessages([]);
     } catch {
-      setOptimisticMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setOptimisticMessages((prev) => prev.filter((messageItem) => messageItem.id !== tempId));
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       handleSend();
     }
   };
 
-  const dynamicSuggestions = todayRaces.length > 0
-    ? [
-        bestBetRace?.topPrediction ? `Why is ${bestBetRace.topPrediction.horseName} the best bet today?` : null,
-        nextUpRace ? `Talk me through ${formatRacePrompt(nextUpRace)}` : null,
-        focusRace?.topPrediction ? `Who can beat ${focusRace.topPrediction.horseName} in ${formatRacePrompt(focusRace)}?` : null,
-        weeklyOverview[0]?.spotlightRaceName ? `Which race later this week looks strongest?` : null,
-        recentModelResult ? `What did the latest ${recentModelResult.topPickCorrect ? "hit" : "miss"} teach the model?` : null,
-        `Which jockey has the best book today?`,
-        `Which races are worth betting on?`,
-        `Analyze today's live races now`,
-        `Sync the live card now`,
-        `Increase weight on odds movement`,
-        `Set weights to 18% course form, 18% form and distance, 14% jockey and trainer, 10% odds movement, 10% history, 8% field strength, 7% weight carried, 6% surface fit, 5% pace profile, 4% price value`,
-      ].filter((value): value is string => Boolean(value))
-    : [
-        "Sync the live card now",
-        "Give more weight to odds movement",
-        "Which horse has the best trainer/jockey combo?",
-        "Explain the current prediction weights",
-        "Make course form more important",
-      ];
-
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-screen max-w-5xl mx-auto">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="size-5 text-primary" />
-          <h1 className="font-semibold text-foreground">AI Chat</h1>
-          {todayRaces.length > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent font-medium">
-              {todayRaces.length} races loaded
-            </span>
-          )}
+    <div className="mx-auto flex h-[calc(100vh-3.5rem)] max-w-5xl flex-col md:h-screen">
+      <div className="border-b border-border px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="size-5 text-primary" />
+            <h1 className="font-semibold text-foreground">AI Chat</h1>
+            {todayRaces.length > 0 && (
+              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
+                {todayRaces.length} races loaded
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="hidden text-xs text-muted-foreground sm:block">Focus:</span>
+            <select
+              value={selectedRaceId ?? ""}
+              onChange={(event) => setSelectedRaceId(event.target.value ? Number(event.target.value) : undefined)}
+              className="max-w-[260px] rounded-lg border border-border bg-card px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">All races</option>
+              {usableRaces.map((race) => (
+                <option key={race.id} value={race.id}>
+                  {`R${race.raceNumber} ${race.venue} ${race.raceTime} - ${race.name}`}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground hidden sm:block">Focus:</span>
-          <select
-            value={selectedRaceId ?? ""}
-            onChange={(e) => setSelectedRaceId(e.target.value ? Number(e.target.value) : undefined)}
-            className="text-xs bg-card border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring max-w-[240px]"
-          >
-            <option value="">All races</option>
-            {usableRaces.map((r) => (
-              <option key={r.id} value={r.id}>{`R${r.raceNumber} ${r.venue} ${r.raceTime} - ${r.name}`}</option>
+
+        <div className="mt-4">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {BET_TYPE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => setSelectedBetType(option.value)}
+                className={cn(
+                  "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                  selectedBetType === option.value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-foreground",
+                )}
+              >
+                {option.shortLabel}
+              </button>
             ))}
-          </select>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Active bet lens: <span className="font-medium text-foreground">{selectedBetMeta.label}</span> - {selectedBetMeta.hint}
+          </p>
         </div>
       </div>
 
       {lastWeightsUpdate && (
-        <div className="mx-6 mt-3 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-accent/10 border border-accent/20">
-          <Settings2 className="size-4 text-accent shrink-0" />
-          <p className="text-xs text-accent flex-1">
-            <strong>Weights updated:</strong> Course {(lastWeightsUpdate.courseForm * 100).toFixed(0)}% · Form {(lastWeightsUpdate.formDistance * 100).toFixed(0)}% · J/T {(lastWeightsUpdate.jockeyTrainer * 100).toFixed(0)}% · Odds {(lastWeightsUpdate.oddsMovement * 100).toFixed(0)}% · Hist {(lastWeightsUpdate.history * 100).toFixed(0)}% · Field {(lastWeightsUpdate.fieldStrength * 100).toFixed(0)}% · Weight {(lastWeightsUpdate.weightCarried * 100).toFixed(0)}% · Surface {(lastWeightsUpdate.surfaceFit * 100).toFixed(0)}% · Pace {(lastWeightsUpdate.paceProfile * 100).toFixed(0)}% · Value {(lastWeightsUpdate.priceValue * 100).toFixed(0)}%
+        <div className="mx-6 mt-3 flex items-center gap-2 rounded-lg border border-accent/20 bg-accent/10 px-4 py-2.5">
+          <Settings2 className="size-4 shrink-0 text-accent" />
+          <p className="flex-1 text-xs text-accent">
+            <strong>Weights updated:</strong> Course {(lastWeightsUpdate.courseForm * 100).toFixed(0)}% - Form {(lastWeightsUpdate.formDistance * 100).toFixed(0)}% - J/T {(lastWeightsUpdate.jockeyTrainer * 100).toFixed(0)}% - Odds {(lastWeightsUpdate.oddsMovement * 100).toFixed(0)}% - Hist {(lastWeightsUpdate.history * 100).toFixed(0)}% - Field {(lastWeightsUpdate.fieldStrength * 100).toFixed(0)}% - Weight {(lastWeightsUpdate.weightCarried * 100).toFixed(0)}% - Surface {(lastWeightsUpdate.surfaceFit * 100).toFixed(0)}% - Pace {(lastWeightsUpdate.paceProfile * 100).toFixed(0)}% - Value {(lastWeightsUpdate.priceValue * 100).toFixed(0)}%
           </p>
-          <button onClick={() => setLastWeightsUpdate(null)} className="text-muted-foreground hover:text-foreground text-base leading-none">&times;</button>
+          <button
+            onClick={() => setLastWeightsUpdate(null)}
+            className="text-base leading-none text-muted-foreground hover:text-foreground"
+          >
+            x
+          </button>
         </div>
       )}
 
@@ -244,245 +413,167 @@ export default function Chat() {
                 </p>
               ))}
             </div>
-            <button onClick={() => setLastActionResults([])} className="text-muted-foreground hover:text-foreground text-base leading-none">&times;</button>
+            <button
+              onClick={() => setLastActionResults([])}
+              className="text-base leading-none text-muted-foreground hover:text-foreground"
+            >
+              x
+            </button>
           </div>
         </div>
       )}
 
-      <div className="px-6 pt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-        {bestBetRace?.topPrediction && (
-          <button
-            onClick={() => {
-              setSelectedRaceId(bestBetRace.id);
-              setInput(`Why is ${bestBetRace.topPrediction?.horseName} the best bet today?`);
-            }}
-            className="text-left rounded-xl border border-primary/20 bg-primary/10 px-4 py-3 hover:bg-primary/15 transition-colors"
-          >
-            <div className="flex items-center gap-2 text-primary text-xs font-semibold uppercase tracking-wide">
-              <Sparkles className="size-3.5" /> Best bet now
-            </div>
-            <p className="text-sm font-semibold text-foreground mt-2">{bestBetRace.topPrediction.horseName}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Race {bestBetRace.raceNumber} {bestBetRace.name} · {formatConfidence(bestBetRace.topPrediction.confidence)}
-            </p>
-            <p className="text-xs text-primary mt-2">{formatConfidenceBand(bestBetRace.forecastBand)}</p>
-          </button>
-        )}
-
-        {nextUpRace && (
-          <button
-            onClick={() => {
-              setSelectedRaceId(nextUpRace.id);
-              setInput(`Talk me through ${formatRacePrompt(nextUpRace)}`);
-            }}
-            className="text-left rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/30 hover:bg-muted/30 transition-colors"
-          >
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Clock3 className="size-3.5 text-primary" /> Next off
-            </div>
-            <p className="text-sm font-semibold text-foreground mt-2">Race {nextUpRace.raceNumber} {nextUpRace.name}</p>
-            <p className="text-xs text-muted-foreground mt-1">{nextUpRace.venue} · {nextUpRace.raceTime} · {formatMinutesToRace(nextUpRace.minutesToRace)}</p>
-            <p className="text-xs text-foreground mt-2">{nextUpRace.topPrediction ? `${nextUpRace.topPrediction.horseName} leads the book` : "Forecast still building"}</p>
-          </button>
-        )}
-
-        {(weeklyOverview[0] || recentModelResult) && (
-          <button
-            onClick={() => setInput(weeklyOverview[0]?.spotlightRaceName ? `Which race later this week looks strongest?` : `What did the latest result teach the model?`)}
-            className="text-left rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/30 hover:bg-muted/30 transition-colors"
-          >
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {weeklyOverview[0]?.spotlightRaceName ? <CalendarDays className="size-3.5 text-primary" /> : <ShieldCheck className="size-3.5 text-primary" />} Weekly angle
-            </div>
-            <p className="text-sm font-semibold text-foreground mt-2">
-              {weeklyOverview[0]?.spotlightRaceName ?? (recentModelResult?.topPickCorrect ? "Recent model hit" : "Recent model lesson")}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {weeklyOverview[0]?.spotlightRaceName
-                ? `${weeklyOverview[0].label} · ${weeklyOverview[0].spotlightHorseName ?? "Spotlight forming"}${weeklyOverview[0].spotlightConfidence != null ? ` · ${Math.round(weeklyOverview[0].spotlightConfidence * 100)}%` : ""}`
-                : recentModelResult
-                  ? `${recentModelResult.raceName} · ${recentModelResult.topPickCorrect ? "top pick landed" : "top pick missed"}`
-                  : "Ask for the week-ahead confidence map"}
-            </p>
-            <p className="text-xs text-foreground mt-2">
-              {performance?.strongestEdge ?? "Use chat to compare today against the next 7 days"}
-            </p>
-          </button>
-        )}
-      </div>
-
       {focusRace && (
-        <div className="mx-6 mt-3 rounded-xl border border-primary/20 bg-primary/8 px-4 py-3 flex items-start justify-between gap-3">
+        <div className="mx-6 mt-3 flex items-start justify-between gap-3 rounded-xl border border-primary/20 bg-primary/8 px-4 py-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-primary">Focused race</p>
-            <p className="text-sm font-semibold text-foreground mt-1">Race {focusRace.raceNumber} {focusRace.name}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {focusRace.venue} · {focusRace.raceTime} · {formatMinutesToRace(focusRace.minutesToRace)}
+            <p className="mt-1 text-sm font-semibold text-foreground">
+              Race {focusRace.raceNumber} {focusRace.name}
             </p>
-            <p className="text-xs text-foreground mt-2">
+            <p className="mt-1 text-xs text-muted-foreground">
+              {focusRace.venue} - {focusRace.raceTime}
+            </p>
+            <p className="mt-2 text-xs text-foreground">
               {focusRace.topPrediction
-                ? `${focusRace.topPrediction.horseName} leads at ${formatConfidence(focusRace.topPrediction.confidence)} · ${formatConfidenceBand(focusRace.forecastBand)}`
-                : "Forecast still building for this race"}
+                ? `${focusRace.topPrediction.horseName} is the current lead for the ${selectedBetMeta.label.toLowerCase()} lens.`
+                : "Forecast still building for this race."}
             </p>
           </div>
-          <button onClick={() => setSelectedRaceId(undefined)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <button
+            onClick={() => setSelectedRaceId(undefined)}
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
             Clear
           </button>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+      <div className="flex-1 space-y-5 overflow-y-auto px-6 py-4">
         {isLoading ? (
-          <div className="text-center text-muted-foreground text-sm pt-8">Loading chat history...</div>
+          <div className="pt-8 text-center text-sm text-muted-foreground">Loading chat history...</div>
         ) : allMessages.length === 0 ? (
-          <div className="text-center pt-8 space-y-5">
-            <div className="size-16 rounded-full bg-primary/15 flex items-center justify-center mx-auto">
+          <div className="space-y-5 pt-10 text-center">
+            <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-primary/15">
               <Bot className="size-8 text-primary" />
             </div>
             <div>
-              <p className="font-semibold text-foreground text-lg">AAA Bets AI Analyst</p>
-              <p className="text-base text-muted-foreground mt-1 max-w-2xl mx-auto leading-7">
-                I can read the live card, race history, current weights, recent model form, and the app's control surface. Ask for the best bet, run a sync, refresh forecasts, or tell me exactly how you want the weights set.
+              <p className="text-lg font-semibold text-foreground">AAA Bets AI Analyst</p>
+              <p className="mx-auto mt-2 max-w-2xl text-base leading-7 text-muted-foreground">
+                Clean chat mode is active. Pick the bet type you want, keep the race focus narrow when needed, and ask for the strongest angle, a combo ticket, or a full refresh.
               </p>
             </div>
-            {todayRaces.length > 0 && (
-              <div className="bg-card border border-card-border rounded-xl p-4 max-w-md mx-auto text-left space-y-1.5">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Today's races I can analyse</p>
-                {todayRaces.slice(0, 5).map((r) => (
-                  <div key={r.id} className="flex items-center justify-between text-sm gap-3">
-                    <span className="text-foreground min-w-0 truncate">{r.name}</span>
-                    <span className="text-xs text-muted-foreground shrink-0">{r.raceTime} · {r.distance}m</span>
-                  </div>
-                ))}
-                {todayRaces.length > 5 && (
-                  <p className="text-xs text-muted-foreground">+{todayRaces.length - 5} more races</p>
-                )}
-              </div>
-            )}
-            {weeklyOverview.length > 0 && (
-              <div className="bg-card border border-card-border rounded-xl p-4 max-w-md mx-auto text-left space-y-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Week-ahead angles</p>
-                {weeklyOverview.slice(0, 3).map((day) => (
-                  <div key={day.date} className="flex items-start justify-between gap-3 text-sm">
-                    <div>
-                      <p className="text-foreground font-medium">{day.label}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {day.raceCount} races · {day.venues.join(", ") || "Venues pending"}
-                      </p>
-                    </div>
-                    <span className="text-xs text-primary shrink-0">
-                      {day.spotlightHorseName && day.spotlightConfidence != null
-                        ? `${day.spotlightHorseName} ${Math.round(day.spotlightConfidence * 100)}%`
-                        : "Building"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2 justify-center max-w-lg mx-auto">
-              {dynamicSuggestions.slice(0, 4).map((s) => (
+            <div className="mx-auto flex max-w-2xl flex-wrap justify-center gap-2">
+              {dynamicSuggestions.slice(0, 5).map((suggestion) => (
                 <button
-                  key={s}
-                  onClick={() => setInput(s)}
-                  className="text-xs px-3 py-1.5 rounded-full bg-muted hover:bg-primary/15 hover:text-primary transition-colors text-muted-foreground"
+                  key={suggestion}
+                  onClick={() => setInput(suggestion)}
+                  className="rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary"
                 >
-                  {s}
+                  {suggestion}
                 </button>
               ))}
             </div>
           </div>
         ) : (
-          allMessages.map((msg, i) => (
+          allMessages.map((messageItem, index) => (
             <div
-              key={(msg as { id?: number }).id ?? `opt-${i}`}
-              className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "flex-row")}
+              key={(messageItem as { id?: number }).id ?? `opt-${index}`}
+              className={cn("flex gap-3", messageItem.role === "user" ? "flex-row-reverse" : "flex-row")}
             >
-              <div className={cn(
-                "size-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
-                msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
-              )}>
-                {msg.role === "user" ? <User className="size-4" /> : <Bot className="size-4 text-primary" />}
+              <div
+                className={cn(
+                  "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
+                  messageItem.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
+                )}
+              >
+                {messageItem.role === "user" ? (
+                  <User className="size-4" />
+                ) : (
+                  <Bot className="size-4 text-primary" />
+                )}
               </div>
-              <div className={cn(
-                "max-w-[90%] md:max-w-[78%] rounded-2xl px-5 py-4 text-[15px] leading-7 space-y-1",
-                msg.role === "user"
-                  ? "bg-primary text-primary-foreground rounded-tr-sm"
-                  : "bg-card border border-card-border text-foreground rounded-tl-sm",
-              )}>
-                {msg.role === "assistant"
-                  ? renderMessage(msg.content)
-                  : msg.content
-                }
+              <div
+                className={cn(
+                  "max-w-[90%] space-y-1 rounded-2xl px-5 py-4 text-[15px] leading-7 md:max-w-[78%]",
+                  messageItem.role === "user"
+                    ? "rounded-tr-sm bg-primary text-primary-foreground"
+                    : "rounded-tl-sm border border-card-border bg-card text-foreground",
+                )}
+              >
+                {messageItem.role === "assistant" ? renderMessage(messageItem.content) : messageItem.content}
               </div>
             </div>
           ))
         )}
+
         {sendMessage.isPending && (
           <div className="flex gap-3">
-            <div className="size-8 rounded-full bg-muted flex items-center justify-center">
+            <div className="flex size-8 items-center justify-center rounded-full bg-muted">
               <Bot className="size-4 text-primary" />
             </div>
-            <div className="bg-card border border-card-border rounded-2xl rounded-tl-sm px-4 py-3">
-              <div className="flex gap-1 items-center h-4">
-                <span className="size-1.5 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span className="size-1.5 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                <span className="size-1.5 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+            <div className="rounded-2xl rounded-tl-sm border border-card-border bg-card px-4 py-3">
+              <div className="flex h-4 items-center gap-1">
+                <span className="size-1.5 animate-bounce rounded-full bg-primary/60" style={{ animationDelay: "0ms" }} />
+                <span className="size-1.5 animate-bounce rounded-full bg-primary/60" style={{ animationDelay: "150ms" }} />
+                <span className="size-1.5 animate-bounce rounded-full bg-primary/60" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
           </div>
         )}
+
         <div ref={bottomRef} />
       </div>
 
-      {allMessages.length > 0 && allMessages.length < 5 && (
-        <div className="px-6 pb-2 flex flex-wrap gap-2">
-          {dynamicSuggestions.slice(0, 3).map((s) => (
+      <div className="px-6 pb-2">
+        <div className="flex flex-wrap gap-2">
+          {dynamicSuggestions.slice(0, allMessages.length > 0 ? 3 : 4).map((suggestion) => (
             <button
-              key={s}
-              onClick={() => setInput(s)}
-              className="text-xs px-3 py-1.5 rounded-full bg-muted hover:bg-primary/15 hover:text-primary transition-colors text-muted-foreground"
+              key={suggestion}
+              onClick={() => setInput(suggestion)}
+              className="rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary"
             >
-              {s}
+              {suggestion}
             </button>
           ))}
         </div>
-      )}
+      </div>
 
-      <div className="px-6 py-4 border-t border-border space-y-2">
-        <div className="flex gap-3 items-end bg-card border border-card-border rounded-xl p-4">
+      <div className="space-y-2 border-t border-border px-6 py-4">
+        <div className="flex items-end gap-3 rounded-xl border border-card-border bg-card p-4">
           <textarea
-            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={focusRace
-              ? `Ask about ${focusRace.name}, run a forecast refresh, or compare the field...`
-              : todayRaces.length > 0
-                ? `Ask about today's ${todayRaces.length} live races, sync, forecasts, or weights...`
-                : "Ask about predictions, results history, sync, or weights..."}
+            placeholder={
+              focusRace
+                ? `Ask for a ${selectedBetMeta.label.toLowerCase()} read on ${focusRace.name}, refresh forecasts, or compare the field...`
+                : todayRaces.length > 0
+                  ? `Ask for a ${selectedBetMeta.label.toLowerCase()} angle across today's ${todayRaces.length} live races, sync, forecasts, or weights...`
+                  : `Ask for a ${selectedBetMeta.label.toLowerCase()} angle, results history, sync, or weight changes...`
+            }
             rows={1}
-            className="flex-1 bg-transparent text-[15px] leading-6 text-foreground resize-none focus:outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
+            className="min-h-[24px] max-h-[120px] flex-1 resize-none bg-transparent text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none"
             style={{ height: "auto" }}
-            onInput={(e) => {
-              const t = e.target as HTMLTextAreaElement;
-              t.style.height = "auto";
-              t.style.height = Math.min(t.scrollHeight, 120) + "px";
+            onInput={(event) => {
+              const target = event.target as HTMLTextAreaElement;
+              target.style.height = "auto";
+              target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
             }}
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sendMessage.isPending}
-            className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:opacity-90 transition-opacity disabled:opacity-40"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {sendMessage.isPending ? <Zap className="size-4 animate-pulse" /> : <Send className="size-4" />}
           </button>
         </div>
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            {focusRace ? `Focused on Race ${focusRace.raceNumber} · ` : ""}Enter to send · Shift+Enter for new line
+            {focusRace ? `Focused on Race ${focusRace.raceNumber} - ` : ""}Enter to send - Shift+Enter for new line
           </p>
           <Link href="/weights">
-            <span className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer">
+            <span className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-primary">
               <TrendingUp className="size-3" /> Set or adjust weights
             </span>
           </Link>
