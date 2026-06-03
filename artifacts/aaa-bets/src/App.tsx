@@ -1,3 +1,4 @@
+import { Component, type ElementType, type ReactNode } from "react";
 import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -38,7 +39,41 @@ const NAV = [
   { href: "/install", label: "Install", icon: Download },
 ];
 
-function NavItem({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) {
+class RouteErrorBoundary extends Component<
+  { children: ReactNode; resetKey: string },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="mx-auto max-w-xl p-6">
+          <div className="rounded-xl border border-card-border bg-card p-5">
+            <p className="font-semibold text-foreground">This page failed to load.</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Try another tab or refresh after the API finishes loading.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function NavItem({ href, label, icon: Icon }: { href: string; label: string; icon: ElementType }) {
   const [location] = useLocation();
   const active = href === "/" ? location === "/" : location.startsWith(href);
   return (
@@ -58,7 +93,7 @@ function NavItem({ href, label, icon: Icon }: { href: string; label: string; ico
   );
 }
 
-function Layout({ children }: { children: React.ReactNode }) {
+function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-background">
       <aside className="hidden md:flex flex-col w-60 bg-sidebar border-r border-sidebar-border shrink-0">
@@ -103,18 +138,22 @@ function Layout({ children }: { children: React.ReactNode }) {
 }
 
 function Router() {
+  const [location] = useLocation();
+
   return (
     <Layout>
-      <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/races" component={Races} />
-        <Route path="/races/:id" component={RaceDetail} />
-        <Route path="/form-guide" component={FormGuide} />
-        <Route path="/chat" component={Chat} />
-        <Route path="/weights" component={Weights} />
-        <Route path="/install" component={InstallApp} />
-        <Route component={NotFound} />
-      </Switch>
+      <RouteErrorBoundary resetKey={location}>
+        <Switch>
+          <Route path="/" component={Dashboard} />
+          <Route path="/races" component={Races} />
+          <Route path="/races/:id" component={RaceDetail} />
+          <Route path="/form-guide" component={FormGuide} />
+          <Route path="/chat" component={Chat} />
+          <Route path="/weights" component={Weights} />
+          <Route path="/install" component={InstallApp} />
+          <Route component={NotFound} />
+        </Switch>
+      </RouteErrorBoundary>
     </Layout>
   );
 }

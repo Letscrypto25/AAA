@@ -230,19 +230,22 @@ export default function Chat() {
   const [lastActionResults, setLastActionResults] = useState<ActionResult[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const allMessages = [...(history ?? []), ...optimisticMessages];
+  const chatHistory = Array.isArray(history) ? history : [];
+  const raceCards = Array.isArray(races) ? races : [];
+  const summaryData = summary && typeof summary === "object" ? summary : undefined;
+  const allMessages = [...chatHistory, ...optimisticMessages];
   const usableRaces = [
-    ...sortLiveRaceCards((races ?? []).filter((race) => isLiveRaceCard(race))),
+    ...sortLiveRaceCards(raceCards.filter((race) => isLiveRaceCard(race))),
     ...sortHistoryRaceCards(
-      (races ?? []).filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
+      raceCards.filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
     ),
   ];
-  const summaryTodayCards = summary?.todayCards ?? [];
+  const summaryTodayCards = Array.isArray(summaryData?.todayCards) ? summaryData.todayCards : [];
   const todayRaces = summaryTodayCards.length > 0
     ? summaryTodayCards
     : usableRaces.filter((race) => race.status === "upcoming" || race.status === "analyzing");
-  const weeklyOverview = summary?.weeklyOverview ?? [];
-  const performance = summary?.performance;
+  const weeklyOverview = Array.isArray(summaryData?.weeklyOverview) ? summaryData.weeklyOverview : [];
+  const performance = summaryData?.performance && typeof summaryData.performance === "object" ? summaryData.performance : undefined;
   const focusRace = usableRaces.find((race) => race.id === selectedRaceId)
     ?? todayRaces.find((race) => race.id === selectedRaceId);
   const nextUpRace = [...todayRaces]

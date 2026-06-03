@@ -336,7 +336,7 @@ function AddRaceModal({ onClose }: { onClose: () => void }) {
 
 export default function Races() {
   const { data: raceResponse, isLoading } = useGetRaces();
-  const races = (raceResponse ?? []) as RaceCard[];
+  const races = (Array.isArray(raceResponse) ? raceResponse : []) as RaceCard[];
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<RaceFilter>("all");
   const [viewMode, setViewMode] = useState<RaceViewMode>("live");
@@ -521,9 +521,9 @@ export default function Races() {
                       <span>{formatMinutesToRace(race.minutesToRace)}</span>
                     </p>
 
-                    {race.topPredictions.length > 0 && (
+                    {(race.topPredictions ?? []).length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {race.topPredictions.slice(0, 2).map((prediction: RacePredictionSummary) => (
+                        {(race.topPredictions ?? []).slice(0, 2).map((prediction: RacePredictionSummary) => (
                           <span
                             key={prediction.id}
                             className={cn(

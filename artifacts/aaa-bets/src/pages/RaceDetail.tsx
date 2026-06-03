@@ -249,12 +249,12 @@ export default function RaceDetail() {
   const [showResultModal, setShowResultModal] = useState(false);
   const { data: race, isLoading } = useGetRace(raceId);
   const { data: horseResponse } = useGetRaceHorses(raceId);
-  const horses = ((horseResponse ?? []) as RaceHorse[]);
+  const horses = (Array.isArray(horseResponse) ? horseResponse : []) as RaceHorse[];
   const { data: predictions } = useGetRacePredictions(raceId);
   const analyzeRace = useAnalyzeRace();
   const activeHorses = horses.filter((horse) => !horse.scratched);
   const scratchedHorses = horses.filter((horse) => horse.scratched);
-  const sortedPredictions = [...(predictions ?? [])].sort((left, right) => left.rank - right.rank);
+  const sortedPredictions = [...(Array.isArray(predictions) ? predictions : [])].sort((left, right) => left.rank - right.rank);
   const raceIsOver = Boolean(race?.result) || race?.status === "completed" || race?.status === "cancelled" || ((race?.minutesToRace ?? 1) <= 0);
 
   const handleAnalyze = async () => {

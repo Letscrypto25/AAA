@@ -90,9 +90,10 @@ export default function Dashboard() {
   const [analyzingToday, setAnalyzingToday] = useState(false);
   const [analyzeTodayResult, setAnalyzeTodayResult] = useState<{ status: "idle" | "success" | "error"; count?: number; failed?: number }>({ status: "idle" });
 
-  const todayCards = summary?.todayCards ?? [];
-  const weeklyOverview = summary?.weeklyOverview ?? [];
-  const performance = summary?.performance;
+  const summaryData = summary && typeof summary === "object" ? summary : undefined;
+  const todayCards = Array.isArray(summaryData?.todayCards) ? summaryData.todayCards : [];
+  const weeklyOverview = Array.isArray(summaryData?.weeklyOverview) ? summaryData.weeklyOverview : [];
+  const performance = summaryData?.performance && typeof summaryData.performance === "object" ? summaryData.performance : undefined;
   const analyzableTodayRaces = todayCards.filter((race) => race.horseCount > 0 && race.status !== "completed");
 
   const nextUpRace = useMemo(
@@ -150,8 +151,8 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="text-sm text-muted-foreground">
-            {summary?.topPick
-              ? `${summary.topPick} is the strongest live angle right now.`
+            {summaryData?.topPick
+              ? `${summaryData.topPick} is the strongest live angle right now.`
               : "Run a sync to load the latest meetings and forecasts."}
           </div>
         </div>
@@ -202,8 +203,8 @@ export default function Dashboard() {
       </Link>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Today" value={summary?.todayRaceCount ?? 0} note="Live races on today’s card" />
-        <MetricCard label="This week" value={summary?.weekRaceCount ?? 0} note="Races stored in the forecast window" />
+        <MetricCard label="Today" value={summaryData?.todayRaceCount ?? 0} note="Live races on today’s card" />
+        <MetricCard label="This week" value={summaryData?.weekRaceCount ?? 0} note="Races stored in the forecast window" />
         <MetricCard
           label="Hit rate"
           value={performance ? `${Math.round(performance.topPickWinRate * 100)}%` : "-"}
