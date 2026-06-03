@@ -360,9 +360,28 @@ export interface ChatWeightSuggestion {
   priceValue?: number;
 }
 
+export const CHAT_BET_TYPES = ["win", "place", "exacta", "trifecta", "pick3"] as const;
+export type ChatBetType = (typeof CHAT_BET_TYPES)[number];
+
 export type ChatActionSuggestion =
   | { type: "sync" }
   | { type: "analyze"; scope: "focus" | "today" };
+
+const BET_TYPE_LABELS: Record<ChatBetType, string> = {
+  win: "Win",
+  place: "Place",
+  exacta: "Exacta",
+  trifecta: "Trifecta",
+  pick3: "Pick 3",
+};
+
+const BET_TYPE_PATTERNS: Array<{ type: ChatBetType; patterns: RegExp[] }> = [
+  { type: "pick3", patterns: [/\bpick\s*3\b/i, /\bpick3\b/i, /\btreble\b/i] },
+  { type: "trifecta", patterns: [/\btrifecta\b/i, /\btrio\b/i] },
+  { type: "exacta", patterns: [/\bexacta\b/i, /\bforecast\b/i] },
+  { type: "place", patterns: [/\bplace\b/i, /\beach[\s-]?way\b/i] },
+  { type: "win", patterns: [/\bwin\b/i, /\bbest\s+bet\b/i, /\bstraight\b/i] },
+];
 
 const WEIGHT_KEYS = ["courseForm", "formDistance", "jockeyTrainer", "oddsMovement", "history", "fieldStrength", "weightCarried", "surfaceFit", "paceProfile", "priceValue"] as const;
 const WEIGHT_LABELS: Array<{ key: keyof WeightConfig; patterns: RegExp[] }> = [
@@ -487,6 +506,32 @@ function dedupeActionSuggestions(actions: ChatActionSuggestion[]): ChatActionSug
   });
 }
 
+export function inferBetTypeFromText(message: string): ChatBetType | undefined {
+  for (const option of BET_TYPE_PATTERNS) {
+    if (option.patterns.some((pattern) => pattern.test(message))) {
+      return option.type;
+    }
+  }
+  return undefined;
+}
+
+function getBetTypeResponseGuide(betType: ChatBetType): string {
+  switch (betType) {
+    case "win":
+      return "Default to the strongest single win selection and explain why it is the cleanest straight bet.";
+    case "place":
+      return "Prioritise safer place or each-way angles, especially when a runner looks reliable without needing to dominate the race.";
+    case "exacta":
+      return "Prioritise the best ordered first-second combination and explain which runner is the anchor and which horse completes the pair.";
+    case "trifecta":
+      return "Prioritise the best ordered first-second-third combination and explain whether the ticket should be boxed or kept in order.";
+    case "pick3":
+      return "Think in three-leg sequences across multiple races, favouring steady confidence across all legs over one flashy standout.";
+    default:
+      return "Answer in the style that best fits the current active bet type.";
+  }
+}
+
 function tryParseActionSuggestions(message: string, hasFocusRace: boolean): ChatActionSuggestion[] {
   const text = message.trim().toLowerCase();
   if (!text) return [];
@@ -550,8 +595,11 @@ export async function chatWithAI(
   chatHistory: Array<{ role: "user" | "assistant"; content: string }>,
   raceDayBriefing?: string,
   hasFocusRace: boolean = false,
+  betType: ChatBetType = "win",
 ): Promise<{ reply: string; weightSuggestions?: ChatWeightSuggestion; actionSuggestions: ChatActionSuggestion[] }> {
   const inferredControls = inferChatControlsFromMessage(message, currentWeights, hasFocusRace);
+  const activeBetLabel = BET_TYPE_LABELS[betType];
+  const betTypeGuide = getBetTypeResponseGuide(betType);
   const systemPrompt = `You are AAA Bets - an expert South African horse racing analyst and AI betting advisor. You have full visibility of today's card, the coming week, recent graded results, live odds movement, and the model's current hit rate.
 
 The live FORECAST CONTEXT below is the source of truth. If older chat history conflicts with it, trust the live FORECAST CONTEXT and say so plainly.
@@ -578,6 +626,11 @@ The live FORECAST CONTEXT below is the source of truth. If older chat history co
 - Surface Fit: ${(currentWeights.surfaceFit * 100).toFixed(0)}% - surface suitability
 - Pace Profile: ${(currentWeights.paceProfile * 100).toFixed(0)}% - likely race tempo fit
 - Price Value: ${(currentWeights.priceValue * 100).toFixed(0)}% - value versus the market price
+
+## ACTIVE BET LENS
+- Active bet type: ${activeBetLabel}
+- ${betTypeGuide}
+- If the user explicitly asks for a different bet type in the current message, answer for that requested type.
 
 ## FORECAST CONTEXT
 ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on the Dashboard."}
