@@ -72,6 +72,10 @@ class TheRacingApiRequestError extends Error {
   }
 }
 
+export function getTheRacingApiErrorStatus(err: unknown): number | null {
+  return err instanceof TheRacingApiRequestError ? err.status : null;
+}
+
 function normalizeWhitespace(value: string): string {
   return value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -566,22 +570,38 @@ export async function fetchTheRacingApiRacecardsByDate(dateKey: string): Promise
       .filter((race): race is NormalizedRaceCard => race !== null);
   } catch (err) {
     const standardDay = getStandardDayParam(dateKey);
+    const proStatus = getTheRacingApiErrorStatus(err);
     const canTryStandard = config.plan !== "pro"
-      || (err instanceof TheRacingApiRequestError && [401, 403, 404].includes(err.status));
+      || (proStatus != null && [401, 403, 404].includes(proStatus));
     if (!standardDay || !canTryStandard) throw err;
 
-    logger.warn({ err, dateKey }, "Pro racecards request failed; retrying with standard endpoint");
-    const payload = await theracingApiRequest<unknown>("/v1/racecards/standard", {
-      day: standardDay,
-      region_codes: config.regionCodes.length > 0 ? config.regionCodes : undefined,
-      course_ids: config.courseIds.length > 0 ? config.courseIds : undefined,
-      limit: 500,
-      skip: 0,
-    });
-    return extractPageItems<unknown>(payload, ["racecards", "races", "data"])
-      .map(normalizeRacecard)
-      .filter((race): race is NormalizedRaceCard => race !== null)
-      .filter((race) => race.meetingDate === dateKey);
+    const logPayload = { dateKey, status: proStatus, endpoint: "pro" };
+    if (proStatus === 404) {
+      logger.info(logPayload, "Pro racecards not available for date; retrying with standard endpoint");
+    } else {
+      logger.warn(logPayload, "Pro racecards request failed; retrying with standard endpoint");
+    }
+
+    try {
+      const payload = await theracingApiRequest<unknown>("/v1/racecards/standard", {
+        day: standardDay,
+        region_codes: config.regionCodes.length > 0 ? config.regionCodes : undefined,
+        course_ids: config.courseIds.length > 0 ? config.courseIds : undefined,
+        limit: 500,
+        skip: 0,
+      });
+      return extractPageItems<unknown>(payload, ["racecards", "races", "data"])
+        .map(normalizeRacecard)
+        .filter((race): race is NormalizedRaceCard => race !== null)
+        .filter((race) => race.meetingDate === dateKey);
+    } catch (standardErr) {
+      const standardStatus = getTheRacingApiErrorStatus(standardErr);
+      if (standardStatus === 404) {
+        logger.info({ dateKey, status: standardStatus, endpoint: "standard" }, "Standard racecards not available for date; skipping The Racing API enrichment");
+        return [];
+      }
+      throw standardErr;
+    }
   }
 }
 
@@ -598,7 +618,18 @@ export async function fetchTheRacingApiResultsByDate(dateKey: string): Promise<M
   const config = getTheRacingApiConfig();
   if (!config) return new Map();
 
-  const payload = await theracingApiRequest<unknown>("/v1/results", buildResultsQuery(dateKey, config));
+  let payload: unknown;
+  try {
+    payload = await theracingApiRequest<unknown>("/v1/results", buildResultsQuery(dateKey, config));
+  } catch (err) {
+    const status = getTheRacingApiErrorStatus(err);
+    if (status === 404) {
+      logger.info({ dateKey, status }, "The Racing API results not available for date");
+      return new Map();
+    }
+    throw err;
+  }
+
   const items = extractPageItems<unknown>(payload, ["results", "races", "data"]);
   const resultMap = new Map<string, NormalizedRaceResult>();
 

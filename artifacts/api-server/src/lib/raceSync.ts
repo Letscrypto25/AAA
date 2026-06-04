@@ -28,6 +28,7 @@ import {
   fetchTheRacingApiRaceDetail,
   fetchTheRacingApiResultDetail,
   fetchTheRacingApiResultsByDate,
+  getTheRacingApiErrorStatus,
   isTheRacingApiConfigured,
   type NormalizedRaceCard,
   type NormalizedRaceResult,
@@ -569,7 +570,14 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
             return detailMatch ? mergeRaceCardDetail(card, detailMatch) : card;
           });
         } catch (err) {
-          logger.warn({ err, dateKey }, "The Racing API merge failed; keeping Gallop racecards");
+          const status = getTheRacingApiErrorStatus(err);
+          if (status === 401 || status === 403) {
+            logger.warn({ dateKey, status }, "The Racing API merge skipped due to credential or plan access; keeping Gallop racecards");
+          } else if (status === 404) {
+            logger.info({ dateKey, status }, "The Racing API merge skipped because no matching racecards were available; keeping Gallop racecards");
+          } else {
+            logger.warn({ err, dateKey, status }, "The Racing API merge failed; keeping Gallop racecards");
+          }
         }
       }
 
