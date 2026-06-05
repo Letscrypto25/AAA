@@ -4,6 +4,7 @@ import { resolveGallopTodayDateKey } from "../lib/gallop-form";
 const router = Router();
 
 const GALLOP_GRAPHQL = "https://backend.gallop.co.za/graphql";
+const GALLOP_TV_FALLBACK_URL = "https://www.galloptv.co.za/live-streams/gallop-tv";
 
 async function gqlFetch(query: string): Promise<unknown> {
   const res = await fetch(GALLOP_GRAPHQL, {
@@ -49,7 +50,7 @@ router.get("/gallop/links", async (req, res): Promise<void> => {
     const iframe = data?.data?.iframe ?? {};
     res.json({
       ...iframe,
-      galloptvLink: sanitizeGallopLink(iframe.galloptvLink, "https://www.gallop.co.za/"),
+      galloptvLink: sanitizeGallopLink(iframe.galloptvLink, GALLOP_TV_FALLBACK_URL),
     });
   } catch (err) {
     req.log.warn({ err }, "Failed to fetch Gallop links");
@@ -59,7 +60,7 @@ router.get("/gallop/links", async (req, res): Promise<void> => {
       programmeLink: "https://sahorseracing.co.za/sahr/public.html",
       bettingTabGold: "https://www.tote.co.za",
       SAhorseRacing: "https://sahorseracing.co.za/sahr/public.html",
-      galloptvLink: "https://www.gallop.co.za/",
+      galloptvLink: GALLOP_TV_FALLBACK_URL,
       affiliatedGoldCircleLink: "https://www.goldcircle.co.za",
       affiliatedNhraLink: "https://www.nhra.co.za",
     });

@@ -516,6 +516,11 @@ type RaceCardSourceResult = {
   meetingsFound: number;
 };
 
+function useGallopTvFallback(dateKey: string, reason: string): RaceCardSourceResult {
+  logger.warn({ dateKey, reason }, "Using Gallop TV fallback instead of Tote racecard fallback");
+  return { source: "gallop", cards: [], meetingsFound: 0 };
+}
+
 async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
   const programs = await fetchProgramsByDate(dateKey);
   if (programs.length === 0) {
@@ -599,11 +604,11 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
       return { source: "gallop", cards: [], meetingsFound: 0 };
     }
   } catch (err) {
-    logger.warn({ err, dateKey }, "Gallop racecard sync failed; falling back to The Racing API or Tote");
+    logger.warn({ err, dateKey }, "Gallop racecard sync failed; trying The Racing API before Gallop TV fallback");
   }
 
   if (!isTheRacingApiConfigured()) {
-    return fetchToteRaceCardsForDate(dateKey);
+    return useGallopTvFallback(dateKey, "theracingapi_not_configured");
   }
 
   try {
@@ -626,8 +631,8 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
       meetingsFound: countMeetings(mergedCards),
     };
   } catch (err) {
-    logger.warn({ err, dateKey }, "The Racing API sync failed; falling back to Tote");
-    return fetchToteRaceCardsForDate(dateKey);
+    logger.warn({ err, dateKey }, "The Racing API sync failed; using Gallop TV fallback");
+    return useGallopTvFallback(dateKey, "theracingapi_failed");
   }
 }
 
@@ -780,7 +785,7 @@ export async function syncTodaysMeetings(): Promise<void> {
   const dateStr = await resolveGallopTodayDateKey();
 
   logger.info(
-    { date: dateStr, primarySource: isTheRacingApiConfigured() ? "gallop+theracingapi" : "gallop+tote" },
+    { date: dateStr, primarySource: isTheRacingApiConfigured() ? "gallop+theracingapi+galloptv" : "gallop+galloptv" },
     "Starting weekly race sync",
   );
 
@@ -821,9 +826,18 @@ export async function refreshRaceOdds(raceId: number): Promise<void> {
   let matchedCard = findMatchingCard(sourceResult.cards, race);
 
   if (!matchedCard && sourceResult.source === "theracingapi") {
-    const toteFallback = await fetchToteRaceCardsForDate(race.meetingDate);
-    matchedCard = findMatchingCard(toteFallback.cards, race);
-    if (matchedCard) sourceResult = toteFallback;
+    try {
+      const gallopFallback = await fetchGallopRacecardsByDate(race.meetingDate);
+      const gallopSource: RaceCardSourceResult = {
+        source: "gallop",
+        cards: gallopFallback.cards,
+        meetingsFound: countMeetings(gallopFallback.cards),
+      };
+      matchedCard = findMatchingCard(gallopSource.cards, race);
+      if (matchedCard) sourceResult = gallopSource;
+    } catch (err) {
+      logger.warn({ err, raceId, venue: race.venue, raceNumber: race.raceNumber }, "Gallop refresh fallback failed; Gallop TV remains the fallback surface");
+    }
   }
 
   if (!matchedCard) {

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ExternalLink, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const GALLOP_TV_FALLBACK_URL = "https://www.galloptv.co.za/live-streams/gallop-tv";
 
 const TABS = [
   {
@@ -22,18 +24,52 @@ const TABS = [
     description: "NHRA — historical racing statistics",
   },
   {
-    id: "tote",
-    label: "Tote Betting",
-    url: "https://www.tote.co.za",
-    description: "Tote — pool betting",
+    id: "gallop-tv",
+    label: "Gallop TV",
+    url: GALLOP_TV_FALLBACK_URL,
+    description: "Gallop TV - live racing stream",
   },
 ] as const;
+
+function normalizeExternalUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function FormGuide() {
   const [activeTab, setActiveTab] = useState<string>("fixture");
   const [key, setKey] = useState(0);
+  const [gallopTvUrl, setGallopTvUrl] = useState(GALLOP_TV_FALLBACK_URL);
 
-  const current = TABS.find((t) => t.id === activeTab) ?? TABS[0];
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/gallop/links")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: unknown) => {
+        if (cancelled || !data || typeof data !== "object") return;
+        const url = normalizeExternalUrl((data as { galloptvLink?: unknown }).galloptvLink);
+        if (url) setGallopTvUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setGallopTvUrl(GALLOP_TV_FALLBACK_URL);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const tabs = useMemo(
+    () => TABS.map((tab) => (tab.id === "gallop-tv" ? { ...tab, url: gallopTvUrl } : tab)),
+    [gallopTvUrl],
+  );
+  const current = tabs.find((t) => t.id === activeTab) ?? tabs[0];
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-screen">
@@ -61,7 +97,7 @@ export default function FormGuide() {
       </div>
 
       <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-card/50">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => { setActiveTab(tab.id); setKey((k) => k + 1); }}
