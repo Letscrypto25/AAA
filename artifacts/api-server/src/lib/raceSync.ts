@@ -517,8 +517,57 @@ type RaceCardSourceResult = {
 };
 
 function useGallopTvFallback(dateKey: string, reason: string): RaceCardSourceResult {
-  logger.warn({ dateKey, reason }, "Using Gallop TV fallback instead of Tote racecard fallback");
+  logger.warn({ dateKey, reason }, "Using Gallop TV fallback after structured racecard fallback failed");
   return { source: "gallop", cards: [], meetingsFound: 0 };
+}
+
+async function fetchTheRacingApiSourceCards(dateKey: string): Promise<RaceCardSourceResult> {
+  const cards = await fetchTheRacingApiRacecardsByDate(dateKey);
+  let resultMap = new Map<string, NormalizedRaceResult>();
+  try {
+    resultMap = await fetchTheRacingApiResultsByDate(dateKey);
+  } catch (err) {
+    logger.warn({ err, dateKey }, "The Racing API results fetch failed; keeping racecards without result overlay");
+  }
+
+  const mergedCards = cards.map((card) => {
+    if (!card.sourceRaceId) return card;
+    return mergeResultIntoRacecard(card, resultMap.get(card.sourceRaceId));
+  });
+
+  return {
+    source: "theracingapi",
+    cards: mergedCards,
+    meetingsFound: countMeetings(mergedCards),
+  };
+}
+
+async function fetchStructuredDataFallback(dateKey: string, reason: string): Promise<RaceCardSourceResult | null> {
+  if (isTheRacingApiConfigured()) {
+    try {
+      const apiResult = await fetchTheRacingApiSourceCards(dateKey);
+      if (apiResult.cards.some((card) => hasLiveCard(card))) {
+        logger.info({ dateKey, reason, source: apiResult.source }, "Using structured racecard fallback before Gallop TV fallback");
+        return apiResult;
+      }
+      logger.warn({ dateKey, reason, source: apiResult.source, cardCount: apiResult.cards.length }, "Structured racecard fallback had no runner detail");
+    } catch (err) {
+      logger.warn({ err, dateKey, reason, source: "theracingapi" }, "Structured racecard fallback failed");
+    }
+  }
+
+  try {
+    const toteResult = await fetchToteRaceCardsForDate(dateKey);
+    if (toteResult.cards.some((card) => hasLiveCard(card))) {
+      logger.info({ dateKey, reason, source: toteResult.source }, "Using structured racecard fallback before Gallop TV fallback");
+      return toteResult;
+    }
+    logger.warn({ dateKey, reason, source: toteResult.source, cardCount: toteResult.cards.length }, "Structured racecard fallback had no runner detail");
+  } catch (err) {
+    logger.warn({ err, dateKey, reason, source: "tote" }, "Structured racecard fallback failed");
+  }
+
+  return null;
 }
 
 async function fetchToteRaceCardsForDate(dateKey: string): Promise<RaceCardSourceResult> {
@@ -594,7 +643,10 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
         };
       }
 
-      logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; using shell schedule instead of noisy fallback");
+      logger.warn({ dateKey, gallopCardCount: mergedCards.length }, "Gallop returned shell racecards only; trying structured data fallback before Gallop TV fallback");
+      const structuredFallback = await fetchStructuredDataFallback(dateKey, "gallop_shell_cards");
+      if (structuredFallback) return structuredFallback;
+
       return {
         source: "gallop",
         cards: mergedCards,
@@ -607,33 +659,8 @@ async function fetchPreferredRaceCardsForDate(dateKey: string): Promise<RaceCard
     logger.warn({ err, dateKey }, "Gallop racecard sync failed; trying The Racing API before Gallop TV fallback");
   }
 
-  if (!isTheRacingApiConfigured()) {
-    return useGallopTvFallback(dateKey, "theracingapi_not_configured");
-  }
-
-  try {
-    const cards = await fetchTheRacingApiRacecardsByDate(dateKey);
-    let resultMap = new Map<string, NormalizedRaceResult>();
-    try {
-      resultMap = await fetchTheRacingApiResultsByDate(dateKey);
-    } catch (err) {
-      logger.warn({ err, dateKey }, "The Racing API results fetch failed; keeping racecards without result overlay");
-    }
-
-    const mergedCards = cards.map((card) => {
-      if (!card.sourceRaceId) return card;
-      return mergeResultIntoRacecard(card, resultMap.get(card.sourceRaceId));
-    });
-
-    return {
-      source: "theracingapi",
-      cards: mergedCards,
-      meetingsFound: countMeetings(mergedCards),
-    };
-  } catch (err) {
-    logger.warn({ err, dateKey }, "The Racing API sync failed; using Gallop TV fallback");
-    return useGallopTvFallback(dateKey, "theracingapi_failed");
-  }
+  const structuredFallback = await fetchStructuredDataFallback(dateKey, "gallop_failed");
+  return structuredFallback ?? useGallopTvFallback(dateKey, "structured_data_failed");
 }
 
 function cardMatchesRace(card: NormalizedRaceCard, race: typeof racesTable.$inferSelect): boolean {

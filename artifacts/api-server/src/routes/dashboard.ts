@@ -11,17 +11,22 @@ import {
 
 const router = Router();
 
+function hasPredictionInputs(card: { horseCount: number; topPrediction: unknown; result: unknown }): boolean {
+  return card.horseCount > 0 || !!card.topPrediction || !!card.result;
+}
+
 router.get("/dashboard/summary", async (_req, res) => {
   const races = await db.select().from(racesTable).orderBy(racesTable.meetingDate, racesTable.raceTime);
   const horses = await db.select().from(horsesTable);
   const cards = await buildRaceForecastCards(races);
   const performance = await getLearningPerformanceSummary();
 
-  const liveCards = sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard));
+  const predictionReadyCards = cards.filter(hasPredictionInputs);
+  const liveCards = sortRaceCardsByLivePriority(predictionReadyCards.filter(isRaceLiveCard));
   const historyCards = cards.filter(isRaceHistoryCard);
   const todayCards = liveCards.filter((card) => card.isToday);
 
-  const weeklyCards = cards.filter((card) => card.isThisWeek);
+  const weeklyCards = predictionReadyCards.filter((card) => card.isThisWeek);
   const upcoming = liveCards.filter((card) => card.status === "upcoming" || card.status === "analyzing");
   const analyzed = cards.filter((card) => !!card.topPrediction);
   const completed = historyCards.filter((card) => card.status === "completed");

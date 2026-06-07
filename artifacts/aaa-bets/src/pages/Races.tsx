@@ -92,6 +92,10 @@ type RaceCard = BaseRace & {
   result: RaceResultSummary | null;
 };
 
+function hasPredictionInputs(race: RaceCard): boolean {
+  return race.horseCount > 0 || !!race.topPrediction || (race.topPredictions ?? []).length > 0 || !!race.result;
+}
+
 function AddRaceModal({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
   const createRace = useCreateRace();
@@ -342,7 +346,8 @@ export default function Races() {
   const [viewMode, setViewMode] = useState<RaceViewMode>("live");
   const [showAdd, setShowAdd] = useState(false);
 
-  const liveRaces = useMemo(() => sortLiveRaceCards(races.filter(isLiveRaceCard)), [races]);
+  const scheduleOnlyCount = useMemo(() => races.filter((race) => isLiveRaceCard(race) && !hasPredictionInputs(race)).length, [races]);
+  const liveRaces = useMemo(() => sortLiveRaceCards(races.filter((race) => isLiveRaceCard(race) && hasPredictionInputs(race))), [races]);
   const historyRaces = useMemo(
     () => sortHistoryRaceCards(races.filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result))),
     [races],
@@ -460,7 +465,9 @@ export default function Races() {
             <p className="text-sm font-semibold text-foreground">{viewTitle}</p>
             <p className="mt-1 text-xs text-muted-foreground">{viewDescription}</p>
           </div>
-          <p className="text-xs text-muted-foreground">{visibleCount} stored race(s) in this view</p>
+          <p className="text-xs text-muted-foreground">
+            {visibleCount} stored race(s) in this view{viewMode === "live" && scheduleOnlyCount > 0 ? ` · ${scheduleOnlyCount} schedule-only` : ""}
+          </p>
         </div>
       </div>
 
