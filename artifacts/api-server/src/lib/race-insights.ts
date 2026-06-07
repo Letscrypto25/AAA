@@ -7,7 +7,7 @@ import {
   racesTable,
   type PredictionFactorBreakdown,
 } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { getMinutesToRace, getRaceTimeProfile, getRelativeDayLabel, isDateToday, isDateWithinDays } from "./race-time";
 
 type RaceRow = typeof racesTable.$inferSelect;
@@ -250,9 +250,11 @@ export async function buildRaceForecastCards(races?: RaceRow[]): Promise<RaceFor
   const raceIds = raceRows.map((race) => race.id);
   if (raceIds.length === 0) return [];
 
-  const allHorses = await db.select().from(horsesTable);
-  const allPredictions = await db.select().from(predictionsTable).orderBy(predictionsTable.rank);
-  const allResults = await db.select().from(raceResultsTable);
+  const [allHorses, allPredictions, allResults] = await Promise.all([
+    db.select().from(horsesTable).where(inArray(horsesTable.raceId, raceIds)),
+    db.select().from(predictionsTable).where(inArray(predictionsTable.raceId, raceIds)).orderBy(predictionsTable.rank),
+    db.select().from(raceResultsTable).where(inArray(raceResultsTable.raceId, raceIds)),
+  ]);
 
   const horsesByRace = new Map<number, HorseRow[]>();
   const predictionsByRace = new Map<number, PredictionRow[]>();
