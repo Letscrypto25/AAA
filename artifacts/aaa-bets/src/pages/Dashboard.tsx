@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   getGetDashboardSummaryQueryKey,
+  getGetRacePredictionsQueryKey,
   getGetRacesQueryKey,
   useAnalyzeRace,
   useGetDashboardSummary,
@@ -20,6 +21,7 @@ import {
   Trophy,
   Zap,
 } from "lucide-react";
+import { getApiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import { formatConfidenceBand, formatMinutesToRace } from "@/lib/forecast";
 
@@ -83,18 +85,31 @@ function SyncBar() {
   );
 }
 
+function canAnalyzeRace(race: {
+  horseCount?: number;
+  minutesToRace?: number | null;
+  result?: unknown;
+  status?: string;
+}): boolean {
+  return (race.horseCount ?? 0) > 0
+    && !race.result
+    && race.status !== "completed"
+    && race.status !== "cancelled"
+    && (race.minutesToRace ?? 1) > 0;
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const analyzeRace = useAnalyzeRace();
   const { data: summary, isLoading } = useGetDashboardSummary();
   const [analyzingToday, setAnalyzingToday] = useState(false);
-  const [analyzeTodayResult, setAnalyzeTodayResult] = useState<{ status: "idle" | "success" | "error"; count?: number; failed?: number }>({ status: "idle" });
+  const [analyzeTodayResult, setAnalyzeTodayResult] = useState<{ status: "idle" | "success" | "error"; count?: number; failed?: number; error?: string }>({ status: "idle" });
 
   const summaryData = summary && typeof summary === "object" ? summary : undefined;
   const todayCards = Array.isArray(summaryData?.todayCards) ? summaryData.todayCards : [];
   const weeklyOverview = Array.isArray(summaryData?.weeklyOverview) ? summaryData.weeklyOverview : [];
   const performance = summaryData?.performance && typeof summaryData.performance === "object" ? summaryData.performance : undefined;
-  const analyzableTodayRaces = todayCards.filter((race) => race.horseCount > 0 && race.status !== "completed");
+  const analyzableTodayRaces = todayCards.filter(canAnalyzeRace);
 
   const nextUpRace = useMemo(
     () =>
@@ -118,23 +133,29 @@ export default function Dashboard() {
     setAnalyzingToday(true);
     let successCount = 0;
     let failedCount = 0;
+    let lastError: string | undefined;
 
     for (const race of analyzableTodayRaces) {
       try {
-        await analyzeRace.mutateAsync({ raceId: race.id });
+        const result = await analyzeRace.mutateAsync({ raceId: race.id });
+        queryClient.setQueryData(getGetRacePredictionsQueryKey(race.id), result.predictions ?? []);
         successCount += 1;
-      } catch {
+      } catch (error) {
         failedCount += 1;
+        lastError = getApiErrorMessage(error, "One or more race forecasts could not be refreshed.");
       }
     }
 
-    await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
-    await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() }),
+      queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }),
+    ]);
 
     setAnalyzeTodayResult({
       status: failedCount > 0 ? "error" : "success",
       count: successCount,
       failed: failedCount,
+      error: lastError,
     });
     setAnalyzingToday(false);
   };
@@ -170,7 +191,7 @@ export default function Dashboard() {
             <p className={cn("mt-2 text-xs font-medium", analyzeTodayResult.status === "success" ? "text-emerald-300" : "text-amber-300")}>
               {analyzeTodayResult.status === "success"
                 ? `Analyzed ${analyzeTodayResult.count ?? 0} race(s).`
-                : `Analyzed ${analyzeTodayResult.count ?? 0} race(s), ${analyzeTodayResult.failed ?? 0} failed.`}
+                : `Analyzed ${analyzeTodayResult.count ?? 0} race(s), ${analyzeTodayResult.failed ?? 0} failed.${analyzeTodayResult.error ? ` ${analyzeTodayResult.error}` : ""}`}
             </p>
           )}
         </div>

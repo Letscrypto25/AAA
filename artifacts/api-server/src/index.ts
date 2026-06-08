@@ -64,7 +64,8 @@ app.listen(port, async (err) => {
     try {
       await runRaceForecast(raceId, "scheduler");
     } catch (error) {
-      logger.warn({ error, raceId }, "Scheduled forecast refresh skipped");
+      const reason = error instanceof Error ? error.message : String(error);
+      logger.warn({ reason, raceId }, "Scheduled forecast refresh skipped");
     }
   });
   setRefreshOddsCallback(refreshRaceOdds);

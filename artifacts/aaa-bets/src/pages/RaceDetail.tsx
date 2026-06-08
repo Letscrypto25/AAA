@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Link, useParams } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { getApiErrorMessage } from "@/lib/api-error";
 import { formatConfidenceBand, formatMinutesToRace, formatOutcomeLabel, getOutcomeTone } from "@/lib/forecast";
 import { cn } from "@/lib/utils";
 
@@ -259,14 +260,21 @@ export default function RaceDetail() {
 
   const handleAnalyze = async () => {
     try {
-      await analyzeRace.mutateAsync({ raceId });
-      await queryClient.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) });
-      await queryClient.invalidateQueries({ queryKey: getGetRacePredictionsQueryKey(raceId) });
-      await queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() });
-      await queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+      const result = await analyzeRace.mutateAsync({ raceId });
+      queryClient.setQueryData(getGetRacePredictionsQueryKey(raceId), result.predictions ?? []);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getGetRaceQueryKey(raceId) }),
+        queryClient.invalidateQueries({ queryKey: getGetRacePredictionsQueryKey(raceId) }),
+        queryClient.invalidateQueries({ queryKey: getGetRacesQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() }),
+      ]);
       toast({ title: "Forecast updated", description: "Predictions have been refreshed for this race." });
-    } catch {
-      toast({ title: "Analysis failed", description: "Check your GROQ_API_KEY and try again.", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "Analysis failed",
+        description: getApiErrorMessage(error, "Unable to refresh the forecast for this race."),
+        variant: "destructive",
+      });
     }
   };
 

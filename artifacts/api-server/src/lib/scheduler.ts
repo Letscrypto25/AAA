@@ -1,5 +1,5 @@
-import { db, racesTable } from "@workspace/db";
-import { and, inArray, lte } from "drizzle-orm";
+import { db, horsesTable, racesTable } from "@workspace/db";
+import { and, eq, inArray, lte } from "drizzle-orm";
 import { logger } from "./logger";
 import { getMinutesToRace, getRaceTimeProfile } from "./race-time";
 
@@ -75,6 +75,19 @@ export function startScheduler() {
         }
 
         if (analyzeCallback) {
+          const activeHorse = await db
+            .select({ id: horsesTable.id })
+            .from(horsesTable)
+            .where(and(eq(horsesTable.raceId, race.id), eq(horsesTable.scratched, false)))
+            .limit(1);
+
+          if (activeHorse.length === 0) {
+            const nextUpdateAt = getNextUpdateTime(race.raceTime, race.meetingDate);
+            await db.update(racesTable).set({ nextUpdateAt }).where(eq(racesTable.id, race.id));
+            logger.warn({ raceId: race.id, raceName: race.name, nextUpdateAt }, "Scheduled forecast skipped; no active runners loaded");
+            continue;
+          }
+
           logger.info({ raceId: race.id, raceName: race.name }, "Scheduled analysis triggered");
           try {
             await analyzeCallback(race.id);
