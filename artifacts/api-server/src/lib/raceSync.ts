@@ -39,6 +39,8 @@ import { getNextUpdateTime } from "./scheduler";
 import { rebuildLearningFeedbackFromHistory, recordRaceResult, runRaceForecast } from "./forecasting";
 import { addDaysToDateKey } from "./race-time";
 
+const MAX_SYNC_ERROR_LENGTH = 4000;
+
 function numberFrom(value?: string | null): number | null {
   if (!value) return null;
   const parsed = Number.parseFloat(value);
@@ -407,7 +409,8 @@ async function syncRaceHorses(raceId: number, card: NormalizedRaceCard): Promise
     };
 
     if (existing) {
-      await db.update(horsesTable).set(values).where(eq(horsesTable.id, existing.id));
+      const { raceId: _raceId, ...updateValues } = values;
+      await db.update(horsesTable).set(updateValues).where(eq(horsesTable.id, existing.id));
     } else {
       await db.insert(horsesTable).values(values);
     }
@@ -808,7 +811,42 @@ async function purgeStalePendingRaces(cutoffDateKey: string): Promise<number> {
   return purged + restoredCompleted;
 }
 
-export async function syncTodaysMeetings(): Promise<void> {
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function getErrorCause(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "cause" in error
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+}
+
+function formatSyncError(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 4 && current; depth++) {
+    const message = getErrorMessage(current).trim();
+    if (message && !parts.includes(message)) parts.push(message);
+    current = getErrorCause(current);
+  }
+
+  const text = parts.join(" | caused by: ") || "Unknown sync error";
+  return text.length > MAX_SYNC_ERROR_LENGTH ? `${text.slice(0, MAX_SYNC_ERROR_LENGTH - 3)}...` : text;
+}
+
+async function recordSyncState(values: typeof syncStateTable.$inferInsert): Promise<void> {
+  try {
+    await db.insert(syncStateTable).values(values);
+  } catch (err) {
+    logger.error({ err, syncStatus: values.status }, "Failed to record race sync status");
+  }
+}
+
+let syncTodaysMeetingsPromise: Promise<void> | null = null;
+
+async function runTodaysMeetingsSync(): Promise<void> {
   const dateStr = await resolveGallopTodayDateKey();
 
   logger.info(
@@ -825,7 +863,7 @@ export async function syncTodaysMeetings(): Promise<void> {
 
     const result = await syncUpcomingMeetings(7);
 
-    await db.insert(syncStateTable).values({
+    await recordSyncState({
       lastSyncDate: dateStr,
       meetingsFound: result.meetingsFound,
       racesCreated: result.racesCreated,
@@ -835,14 +873,27 @@ export async function syncTodaysMeetings(): Promise<void> {
     logger.info({ ...result, purgedSyntheticRaceCount, purgedStalePendingRaceCount }, "Weekly race sync complete");
   } catch (err) {
     logger.error({ err }, "Weekly race sync failed");
-    await db.insert(syncStateTable).values({
+    await recordSyncState({
       lastSyncDate: dateStr,
       meetingsFound: 0,
       racesCreated: 0,
       status: "error",
-      error: err instanceof Error ? err.message : String(err),
+      error: formatSyncError(err),
     });
   }
+}
+
+export async function syncTodaysMeetings(): Promise<void> {
+  if (syncTodaysMeetingsPromise) {
+    logger.info("Race sync already running; waiting for active sync");
+    return syncTodaysMeetingsPromise;
+  }
+
+  syncTodaysMeetingsPromise = runTodaysMeetingsSync().finally(() => {
+    syncTodaysMeetingsPromise = null;
+  });
+
+  return syncTodaysMeetingsPromise;
 }
 
 export async function refreshRaceOdds(raceId: number): Promise<void> {
