@@ -41,6 +41,16 @@ import { addDaysToDateKey } from "./race-time";
 
 const MAX_SYNC_ERROR_LENGTH = 4000;
 
+function stripPostgresNullBytes(value: string): string {
+  return value.replace(/\u0000/g, "");
+}
+
+function dbText(value: string): string;
+function dbText(value: string | null | undefined): string | null;
+function dbText(value: string | null | undefined): string | null {
+  return value == null ? null : stripPostgresNullBytes(value);
+}
+
 function numberFrom(value?: string | null): number | null {
   if (!value) return null;
   const parsed = Number.parseFloat(value);
@@ -336,16 +346,16 @@ async function upsertRace(
 
   const values = {
     raceNumber: card.raceNumber,
-    name: (card.name || `${card.venue} Race ${card.raceNumber}`).trim(),
-    venue: card.venue,
+    name: dbText(card.name || `${card.venue} Race ${card.raceNumber}`).trim(),
+    venue: dbText(card.venue),
     distance: card.distance > 0 ? card.distance : existingRace?.distance ?? 0,
-    raceTime,
-    surface: card.surface || existingRace?.surface || "turf",
-    grade: card.grade ?? existingRace?.grade ?? null,
-    prize: card.prize ?? existingRace?.prize ?? null,
-    meetingDate: card.meetingDate,
+    raceTime: dbText(raceTime),
+    surface: dbText(card.surface || existingRace?.surface || "turf"),
+    grade: dbText(card.grade ?? existingRace?.grade ?? null),
+    prize: dbText(card.prize ?? existingRace?.prize ?? null),
+    meetingDate: dbText(card.meetingDate),
     status,
-    syncedFrom: card.source,
+    syncedFrom: dbText(card.source),
     nextUpdateAt: status === "completed" || status === "cancelled" ? null : getNextUpdateTime(raceTime, card.meetingDate),
   };
 
@@ -391,21 +401,21 @@ async function syncRaceHorses(raceId: number, card: NormalizedRaceCard): Promise
 
     const values = {
       raceId,
-      name: runner.name,
+      name: dbText(runner.name),
       number: runner.number,
-      jockey: runner.jockey || existing?.jockey || "Unknown jockey",
-      trainer: runner.trainer || existing?.trainer || "Unknown trainer",
-      form: runner.form || existing?.form || "",
+      jockey: dbText(runner.jockey || existing?.jockey || "Unknown jockey"),
+      trainer: dbText(runner.trainer || existing?.trainer || "Unknown trainer"),
+      form: dbText(runner.form || existing?.form || ""),
       weight: runner.weight ?? existing?.weight ?? null,
       currentOdds,
       openingOdds,
       oddsMovement,
       scratched: runner.scratched,
-      scratchReason: runner.scratched ? runner.scratchReason ?? existing?.scratchReason ?? null : null,
+      scratchReason: runner.scratched ? dbText(runner.scratchReason ?? existing?.scratchReason ?? null) : null,
       courseRecord: runner.courseRecord || existing?.courseRecord || false,
       distanceRecord: runner.distanceRecord || existing?.distanceRecord || false,
-      trainerJockeyRecord: runner.trainerJockeyRecord || existing?.trainerJockeyRecord || "",
-      notes: runner.notes ?? existing?.notes ?? null,
+      trainerJockeyRecord: dbText(runner.trainerJockeyRecord || existing?.trainerJockeyRecord || ""),
+      notes: dbText(runner.notes ?? existing?.notes ?? null),
     };
 
     if (existing) {
@@ -450,7 +460,7 @@ async function syncOfficialResult(raceId: number, card: NormalizedRaceCard): Pro
       winnerHorseId: winner.id,
       runnerUpHorseId: card.result.runnerUp ? horseByNumber.get(card.result.runnerUp)?.id ?? null : null,
       thirdHorseId: card.result.third ? horseByNumber.get(card.result.third)?.id ?? null : null,
-      notes: card.result.notes ?? `Official ${card.source} result sync`,
+      notes: dbText(card.result.notes ?? `Official ${card.source} result sync`),
     });
     return "recorded";
   } catch (err) {
@@ -833,7 +843,8 @@ function formatSyncError(error: unknown): string {
   }
 
   const text = parts.join(" | caused by: ") || "Unknown sync error";
-  return text.length > MAX_SYNC_ERROR_LENGTH ? `${text.slice(0, MAX_SYNC_ERROR_LENGTH - 3)}...` : text;
+  const sanitizedText = stripPostgresNullBytes(text);
+  return sanitizedText.length > MAX_SYNC_ERROR_LENGTH ? `${sanitizedText.slice(0, MAX_SYNC_ERROR_LENGTH - 3)}...` : sanitizedText;
 }
 
 async function recordSyncState(values: typeof syncStateTable.$inferInsert): Promise<void> {
