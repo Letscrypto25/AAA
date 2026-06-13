@@ -339,6 +339,8 @@ components:
           type: integer
         horseName:
           type: string
+        runnerNumber:
+          type: ["integer", "null"]
         rank:
           type: integer
         score:
@@ -363,6 +365,7 @@ components:
         - id
         - horseId
         - horseName
+        - runnerNumber
         - rank
         - score
         - baseConfidence
@@ -755,7 +758,7 @@ components:
 
     BetTypeChoice:
       type: string
-      enum: [win, place, exacta, trifecta, pick3]
+      enum: [win, place, exacta, trifecta, pick3, jackpot1, jackpot2]
 
     ChatMessage:
       type: object

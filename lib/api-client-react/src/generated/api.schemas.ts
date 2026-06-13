@@ -27,6 +27,8 @@ export interface PredictionSummary {
   id: number;
   horseId: number;
   horseName: string;
+  /** @nullable */
+  runnerNumber: number | null;
   rank: number;
   score: number;
   baseConfidence: number;
@@ -42,13 +44,13 @@ export interface PredictionSummary {
   aiSummary?: string | null;
 }
 
-export type Prediction = PredictionSummary & ({
+export type Prediction = PredictionSummary & {
   raceId: number;
   factors: PredictionFactors;
   createdAt: string;
   /** @nullable */
   gradedAt?: string | null;
-});
+};
 
 export interface RaceResultSummary {
   winnerHorseId: number;
@@ -68,14 +70,13 @@ export interface RaceResultSummary {
   topPickCorrect?: boolean | null;
 }
 
-export type RaceStatus = typeof RaceStatus[keyof typeof RaceStatus];
-
+export type RaceStatus = (typeof RaceStatus)[keyof typeof RaceStatus];
 
 export const RaceStatus = {
-  upcoming: 'upcoming',
-  analyzing: 'analyzing',
-  completed: 'completed',
-  cancelled: 'cancelled',
+  upcoming: "upcoming",
+  analyzing: "analyzing",
+  completed: "completed",
+  cancelled: "cancelled",
 } as const;
 
 export interface Race {
@@ -113,14 +114,14 @@ export interface Race {
   result?: RaceResultSummary | null;
 }
 
-export type HorseOddsMovement = typeof HorseOddsMovement[keyof typeof HorseOddsMovement];
-
+export type HorseOddsMovement =
+  (typeof HorseOddsMovement)[keyof typeof HorseOddsMovement];
 
 export const HorseOddsMovement = {
-  shortening: 'shortening',
-  drifting: 'drifting',
-  stable: 'stable',
-  unknown: 'unknown',
+  shortening: "shortening",
+  drifting: "drifting",
+  stable: "stable",
+  unknown: "unknown",
 } as const;
 
 export interface Horse {
@@ -231,15 +232,16 @@ export interface RecordRaceResultBody {
   notes?: string | null;
 }
 
-export type BetTypeChoice = typeof BetTypeChoice[keyof typeof BetTypeChoice];
-
+export type BetTypeChoice = (typeof BetTypeChoice)[keyof typeof BetTypeChoice];
 
 export const BetTypeChoice = {
-  win: 'win',
-  place: 'place',
-  exacta: 'exacta',
-  trifecta: 'trifecta',
-  pick3: 'pick3',
+  win: "win",
+  place: "place",
+  exacta: "exacta",
+  trifecta: "trifecta",
+  pick3: "pick3",
+  jackpot1: "jackpot1",
+  jackpot2: "jackpot2",
 } as const;
 
 export interface ChatMessageBody {
@@ -249,12 +251,12 @@ export interface ChatMessageBody {
   betType?: BetTypeChoice | null;
 }
 
-export type ChatMessageRole = typeof ChatMessageRole[keyof typeof ChatMessageRole];
-
+export type ChatMessageRole =
+  (typeof ChatMessageRole)[keyof typeof ChatMessageRole];
 
 export const ChatMessageRole = {
-  user: 'user',
-  assistant: 'assistant',
+  user: "user",
+  assistant: "assistant",
 } as const;
 
 export interface ChatMessage {
@@ -266,22 +268,22 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-export type ChatActionResultType = typeof ChatActionResultType[keyof typeof ChatActionResultType];
-
+export type ChatActionResultType =
+  (typeof ChatActionResultType)[keyof typeof ChatActionResultType];
 
 export const ChatActionResultType = {
-  sync: 'sync',
-  analyze_focus: 'analyze_focus',
-  analyze_today: 'analyze_today',
+  sync: "sync",
+  analyze_focus: "analyze_focus",
+  analyze_today: "analyze_today",
 } as const;
 
-export type ChatActionResultStatus = typeof ChatActionResultStatus[keyof typeof ChatActionResultStatus];
-
+export type ChatActionResultStatus =
+  (typeof ChatActionResultStatus)[keyof typeof ChatActionResultStatus];
 
 export const ChatActionResultStatus = {
-  executed: 'executed',
-  skipped: 'skipped',
-  failed: 'failed',
+  executed: "executed",
+  skipped: "skipped",
+  failed: "failed",
 } as const;
 
 export interface ChatActionResult {
@@ -370,6 +372,6 @@ export interface DashboardSummary {
 }
 
 export type GetRacesParams = {
-venue?: string;
-status?: string;
+  venue?: string;
+  status?: string;
 };

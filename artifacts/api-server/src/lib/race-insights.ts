@@ -20,6 +20,7 @@ export type RacePredictionSummary = {
   id: number;
   horseId: number;
   horseName: string;
+  runnerNumber: number | null;
   rank: number;
   score: number;
   baseConfidence: number;
@@ -210,10 +211,12 @@ export function sortRaceCardsByHistoryPriority(cards: RaceForecastCard[]): RaceF
 }
 
 function mapPredictionSummary(prediction: PredictionRow, horsesById: Map<number, HorseRow>): RacePredictionSummary {
+  const horse = horsesById.get(prediction.horseId);
   return {
     id: prediction.id,
     horseId: prediction.horseId,
-    horseName: horsesById.get(prediction.horseId)?.name ?? "",
+    horseName: horse?.name ?? "",
+    runnerNumber: horse?.number ?? null,
     rank: prediction.rank,
     score: prediction.score,
     baseConfidence: prediction.baseConfidence,

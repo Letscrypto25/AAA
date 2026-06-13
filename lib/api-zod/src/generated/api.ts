@@ -51,6 +51,7 @@ export const GetRacesResponseItem = zod.object({
         id: zod.number(),
         horseId: zod.number(),
         horseName: zod.string(),
+        runnerNumber: zod.number().nullable(),
         rank: zod.number(),
         score: zod.number(),
         baseConfidence: zod.number(),
@@ -70,6 +71,7 @@ export const GetRacesResponseItem = zod.object({
       id: zod.number(),
       horseId: zod.number(),
       horseName: zod.string(),
+      runnerNumber: zod.number().nullable(),
       rank: zod.number(),
       score: zod.number(),
       baseConfidence: zod.number(),
@@ -153,6 +155,7 @@ export const GetRaceResponse = zod
           id: zod.number(),
           horseId: zod.number(),
           horseName: zod.string(),
+          runnerNumber: zod.number().nullable(),
           rank: zod.number(),
           score: zod.number(),
           baseConfidence: zod.number(),
@@ -172,6 +175,7 @@ export const GetRaceResponse = zod
         id: zod.number(),
         horseId: zod.number(),
         horseName: zod.string(),
+        runnerNumber: zod.number().nullable(),
         rank: zod.number(),
         score: zod.number(),
         baseConfidence: zod.number(),
@@ -236,6 +240,7 @@ export const GetRaceResponse = zod
             id: zod.number(),
             horseId: zod.number(),
             horseName: zod.string(),
+            runnerNumber: zod.number().nullable(),
             rank: zod.number(),
             score: zod.number(),
             baseConfidence: zod.number(),
@@ -334,6 +339,7 @@ export const GetRacePredictionsResponseItem = zod
     id: zod.number(),
     horseId: zod.number(),
     horseName: zod.string(),
+    runnerNumber: zod.number().nullable(),
     rank: zod.number(),
     score: zod.number(),
     baseConfidence: zod.number(),
@@ -384,6 +390,7 @@ export const AnalyzeRaceResponse = zod.object({
         id: zod.number(),
         horseId: zod.number(),
         horseName: zod.string(),
+        runnerNumber: zod.number().nullable(),
         rank: zod.number(),
         score: zod.number(),
         baseConfidence: zod.number(),
@@ -491,7 +498,15 @@ export const SendChatMessageBody = zod.object({
   raceId: zod.number().nullish(),
   betType: zod
     .union([
-      zod.enum(["win", "place", "exacta", "trifecta", "pick3"]),
+      zod.enum([
+        "win",
+        "place",
+        "exacta",
+        "trifecta",
+        "pick3",
+        "jackpot1",
+        "jackpot2",
+      ]),
       zod.null(),
     ])
     .optional(),
@@ -499,7 +514,15 @@ export const SendChatMessageBody = zod.object({
 
 export const SendChatMessageResponse = zod.object({
   message: zod.string(),
-  selectedBetType: zod.enum(["win", "place", "exacta", "trifecta", "pick3"]),
+  selectedBetType: zod.enum([
+    "win",
+    "place",
+    "exacta",
+    "trifecta",
+    "pick3",
+    "jackpot1",
+    "jackpot2",
+  ]),
   updatedWeights: zod
     .union([
       zod.object({
@@ -590,6 +613,7 @@ export const GetDashboardSummaryResponse = zod.object({
             id: zod.number(),
             horseId: zod.number(),
             horseName: zod.string(),
+            runnerNumber: zod.number().nullable(),
             rank: zod.number(),
             score: zod.number(),
             baseConfidence: zod.number(),
@@ -609,6 +633,7 @@ export const GetDashboardSummaryResponse = zod.object({
           id: zod.number(),
           horseId: zod.number(),
           horseName: zod.string(),
+          runnerNumber: zod.number().nullable(),
           rank: zod.number(),
           score: zod.number(),
           baseConfidence: zod.number(),

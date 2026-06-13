@@ -5,11 +5,30 @@ import { syncTodaysMeetings, refreshRaceOdds } from "./lib/raceSync";
 import { db, predictionWeightsTable, learningFeedbackTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { runRaceForecast } from "./lib/forecasting";
+import { maybePostDailyTopThreeChatBriefing } from "./lib/daily-chat-briefing";
 
 const rawPort = process.env["PORT"] ?? (process.env["RAILWAY_ENVIRONMENT"] ? undefined : "3000");
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
 const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${rawPort}"`);
+
+function startDailyChatBriefingScheduler() {
+  const tick = async () => {
+    try {
+      await maybePostDailyTopThreeChatBriefing();
+    } catch (err) {
+      logger.error({ err }, "Daily top-three chat briefing failed");
+    }
+  };
+
+  setInterval(() => {
+    void tick();
+  }, 60 * 1000);
+
+  setTimeout(() => {
+    void tick();
+  }, 10 * 1000);
+}
 
 app.listen(port, async (err) => {
   if (err) {
@@ -73,6 +92,7 @@ app.listen(port, async (err) => {
 
   startScheduler();
   startSyncScheduler();
+  startDailyChatBriefingScheduler();
   logger.info("Prediction scheduler started");
 
   setTimeout(async () => {

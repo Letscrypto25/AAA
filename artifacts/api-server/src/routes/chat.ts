@@ -10,6 +10,7 @@ import {
 import { desc } from "drizzle-orm";
 import { SendChatMessageBody } from "@workspace/api-zod";
 import {
+  CHAT_BET_TYPES,
   chatWithAI,
   inferBetTypeFromText,
   inferChatControlsFromMessage,
@@ -140,7 +141,10 @@ const BET_TYPE_LABELS: Record<ChatBetType, string> = {
   exacta: "Exacta",
   trifecta: "Trifecta",
   pick3: "Pick 3",
+  jackpot1: "Jackpot 1",
+  jackpot2: "Jackpot 2",
 };
+const CHAT_BET_TYPE_SET = new Set<string>(CHAT_BET_TYPES);
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -151,10 +155,34 @@ function formatPercent(value?: number | null): string {
 }
 
 function resolveBetType(value: unknown, message: string): ChatBetType {
-  if (value === "win" || value === "place" || value === "exacta" || value === "trifecta" || value === "pick3") {
-    return value;
+  if (typeof value === "string" && CHAT_BET_TYPE_SET.has(value)) {
+    return value as ChatBetType;
   }
   return inferBetTypeFromText(message) ?? DEFAULT_BET_TYPE;
+}
+
+function sortCardsByRaceOrder(cards: ForecastCard[]): ForecastCard[] {
+  return [...cards].sort((left, right) => {
+    return (left.meetingDate ?? "").localeCompare(right.meetingDate ?? "")
+      || left.raceTime.localeCompare(right.raceTime)
+      || left.venue.localeCompare(right.venue)
+      || left.raceNumber - right.raceNumber;
+  });
+}
+
+function isUsableTodayCard(card: ForecastCard): boolean {
+  return card.isToday && (card.horseCount > 0 || card.topPredictions.length > 0 || !!card.result);
+}
+
+function formatPredictionPick(prediction: ForecastCard["topPredictions"][number]): string {
+  const runnerLabel = prediction.runnerNumber == null ? "" : `#${prediction.runnerNumber} `;
+  return `${runnerLabel}${prediction.horseName} ${formatPercent(prediction.confidence)}`;
+}
+
+function formatTopThreePredictions(card: ForecastCard): string {
+  const topThree = card.topPredictions.slice(0, 3);
+  if (topThree.length === 0) return "forecast pending";
+  return topThree.map(formatPredictionPick).join(", ");
 }
 
 function getPredictionGap(card: ForecastCard, leftIndex: number, rightIndex: number): number {
@@ -221,11 +249,11 @@ function getRaceTrioStrength(card: ForecastCard): number {
 
 function buildRaceBetOpportunities(
   cards: ForecastCard[],
-  betType: Exclude<ChatBetType, "pick3">,
+  betType: Exclude<ChatBetType, "pick3" | "jackpot1" | "jackpot2">,
   focusRaceId?: number,
 ): RankedBetOpportunity[] {
   return cards
-    .filter((card) => isRaceLiveCard(card) && card.topPrediction)
+    .filter((card) => isRaceLiveCard(card) && card.topPrediction && (card.isToday || card.id === focusRaceId))
     .map((card) => {
       const first = card.topPredictions[0];
       const second = card.topPredictions[1];
@@ -266,31 +294,34 @@ function buildRaceBetOpportunities(
     .slice(0, 4);
 }
 
+function getSequenceStrength(legs: ForecastCard[]): number {
+  const legScores = legs.map((card) => {
+    return card.topPredictions.length >= 3 ? getRaceTrioStrength(card) : getRaceAnchorStrength(card);
+  });
+  const averageScore = legScores.reduce((sum, value) => sum + value, 0) / legScores.length;
+  const minScore = Math.min(...legScores);
+  const scoreRange = Math.max(...legScores) - minScore;
+  return clampNumber(averageScore * 0.68 + minScore * 0.26 - scoreRange * 0.14, 0, 1);
+}
+
+function getTodaySequenceCards(cards: ForecastCard[]): ForecastCard[] {
+  return sortCardsByRaceOrder(cards.filter((card) => card.isToday && card.topPrediction));
+}
+
+function formatSequenceLeg(card: ForecastCard): string {
+  return `R${card.raceNumber} ${formatTopThreePredictions(card)} (${card.status})`;
+}
+
 function buildPick3Opportunities(cards: ForecastCard[]): RankedBetOpportunity[] {
-  const sequenceCards = cards
-    .filter((card) => card.isToday && isRaceLiveCard(card) && card.topPrediction)
-    .sort((left, right) => {
-      return left.raceTime.localeCompare(right.raceTime)
-        || left.raceNumber - right.raceNumber
-        || left.venue.localeCompare(right.venue);
-    });
+  const sequenceCards = getTodaySequenceCards(cards).filter(isRaceLiveCard);
 
   if (sequenceCards.length < 3) return [];
 
   const windows: RankedBetOpportunity[] = [];
   for (let index = 0; index <= sequenceCards.length - 3; index += 1) {
     const legs = sequenceCards.slice(index, index + 3);
-    const legScores = legs.map((card) => getRaceAnchorStrength(card));
-    const averageScore = legScores.reduce((sum, value) => sum + value, 0) / legScores.length;
-    const minScore = Math.min(...legScores);
-    const scoreRange = Math.max(...legScores) - minScore;
-    const score = clampNumber(averageScore * 0.7 + minScore * 0.24 - scoreRange * 0.16, 0, 1);
-    const detail = legs
-      .map((card) => {
-        const top = card.topPrediction;
-        return `R${card.raceNumber} ${top?.horseName ?? "pending"} ${formatPercent(top?.confidence)}`;
-      })
-      .join(" | ");
+    const score = getSequenceStrength(legs);
+    const detail = legs.map(formatSequenceLeg).join(" | ");
 
     windows.push({
       title: `${legs[0].venue} sequence from Race ${legs[0].raceNumber} to Race ${legs[2].raceNumber}`,
@@ -300,6 +331,20 @@ function buildPick3Opportunities(cards: ForecastCard[]): RankedBetOpportunity[] 
   }
 
   return windows.sort((left, right) => right.score - left.score).slice(0, 3);
+}
+
+function buildJackpotOpportunity(cards: ForecastCard[], betType: Extract<ChatBetType, "jackpot1" | "jackpot2">): RankedBetOpportunity[] {
+  const sequenceCards = getTodaySequenceCards(cards);
+  const startIndex = betType === "jackpot2" ? 4 : 0;
+  const legs = sequenceCards.slice(startIndex, startIndex + 4);
+
+  if (legs.length < 4) return [];
+
+  return [{
+    title: `${BET_TYPE_LABELS[betType]} Race ${legs[0].raceNumber} to Race ${legs[legs.length - 1].raceNumber}`,
+    detail: legs.map(formatSequenceLeg).join(" | "),
+    score: getSequenceStrength(legs),
+  }];
 }
 
 function getBetTypeLensLine(betType: ChatBetType): string {
@@ -314,6 +359,10 @@ function getBetTypeLensLine(betType: ChatBetType): string {
       return "BETTING LENS: prefer races with a stable top three and a clear drop to the fourth horse.";
     case "pick3":
       return "BETTING LENS: prefer balanced three-leg sequences across today's card, not just one standout anchor.";
+    case "jackpot1":
+      return "BETTING LENS: Jackpot 1 is today's first four races; show the top three per leg and identify any banker carefully.";
+    case "jackpot2":
+      return "BETTING LENS: Jackpot 2 is today's races five through eight; show the top three per leg and identify any banker carefully.";
     default:
       return "BETTING LENS: use the active bet type to shape the answer.";
   }
@@ -327,7 +376,9 @@ function buildBetTypeBriefing(cards: ForecastCard[], betType: ChatBetType, focus
 
   const opportunities = betType === "pick3"
     ? buildPick3Opportunities(cards)
-    : buildRaceBetOpportunities(cards, betType, focusRaceId);
+    : betType === "jackpot1" || betType === "jackpot2"
+      ? buildJackpotOpportunity(cards, betType)
+      : buildRaceBetOpportunities(cards, betType, focusRaceId);
 
   if (opportunities.length === 0) {
     lines.push("BETTING LENS STATUS: not enough forecasted races are loaded yet for this bet type.");
@@ -497,19 +548,21 @@ async function buildForecastBriefing(
   }
 
   const liveCards = sortRaceCardsByLivePriority(cards.filter(isRaceLiveCard));
-  const todayCards = liveCards.filter((card) => card.isToday);
+  const todayFullCards = sortCardsByRaceOrder(cards.filter(isUsableTodayCard));
+  const todayLiveCards = liveCards.filter((card) => card.isToday);
   const nonTodayLiveCards = liveCards.filter((card) => !card.isToday);
   const historyCards = sortRaceCardsByHistoryPriority(cards.filter(isRaceHistoryCard));
   const weeklyOverview = buildWeeklyOverview(cards);
   const focusCard = focusRaceId
     ? cards.find((card) => card.id === focusRaceId)
-    : todayCards[0] ?? liveCards[0] ?? historyCards[0];
+    : todayFullCards[0] ?? liveCards[0] ?? historyCards[0];
 
   const lines: string[] = [];
   lines.push("AAA BETS FORECAST CONTEXT");
   lines.push("SOURCE OF TRUTH: use this live briefing first and override stale earlier chat turns when they conflict.");
+  lines.push("TODAY FULL CARD is complete-day context. Do not answer today's-card questions from a dashboard slice or a smaller race count.");
   lines.push(
-    `APP STATE: ${liveCards.length} live races | ${todayCards.length} live today | ${historyCards.length} results/history | ${cards.filter((card) => card.isThisWeek).length} week cards`,
+    `APP STATE: ${liveCards.length} live races | ${todayLiveCards.length} live today | ${todayFullCards.length} total today | ${historyCards.length} results/history | ${cards.filter((card) => card.isThisWeek).length} week cards`,
   );
   lines.push(
     `MODEL: ${Math.round(performance.topPickWinRate * 100)}% win | ${Math.round(performance.placedRate * 100)}% place | ${Math.round(performance.averageConfidence * 100)}% avg confidence | bias ${performance.confidenceBias >= 0 ? "+" : ""}${performance.confidenceBias.toFixed(2)}`,
@@ -535,13 +588,13 @@ async function buildForecastBriefing(
   lines.push("AVAILABLE ACTIONS: sync the live card, analyze the focused race, analyze today's live races, update weights.");
   lines.push("");
 
-  if (todayCards.length === 0) {
-    lines.push("LIVE CARD: no live today races are loaded right now.");
+  if (todayFullCards.length === 0) {
+    lines.push("TODAY FULL CARD: no today races are loaded right now.");
   } else {
-    lines.push("LIVE CARD:");
-    for (const card of todayCards) {
+    lines.push(`TODAY FULL CARD (${todayFullCards.length} races):`);
+    for (const card of todayFullCards) {
       lines.push(
-        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | status ${card.status} | ${card.topPrediction ? `${card.topPrediction.horseName} ${Math.round(card.topPrediction.confidence * 100)}% ${card.topPrediction.confidenceBand}` : "forecast pending"}`,
+        `- Race ${card.raceNumber} ${card.name} | ${card.venue} ${card.raceTime} | ${card.distance}m ${card.surface} | status ${card.status} | top 3 ${formatTopThreePredictions(card)}`,
       );
     }
   }

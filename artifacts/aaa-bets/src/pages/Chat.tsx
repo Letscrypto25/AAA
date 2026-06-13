@@ -20,7 +20,7 @@ import {
   sortLiveRaceCards,
 } from "@/lib/race-board";
 
-type BetType = "win" | "place" | "exacta" | "trifecta" | "pick3";
+type BetType = "win" | "place" | "exacta" | "trifecta" | "pick3" | "jackpot1" | "jackpot2";
 
 type WeightsUpdate = {
   courseForm: number;
@@ -85,6 +85,18 @@ const BET_TYPE_OPTIONS: Array<{
     label: "Pick 3",
     shortLabel: "Pick 3",
     hint: "Three-leg sequences across today's best-linked races.",
+  },
+  {
+    value: "jackpot1",
+    label: "Jackpot 1",
+    shortLabel: "JP1",
+    hint: "First four races on today's full card.",
+  },
+  {
+    value: "jackpot2",
+    label: "Jackpot 2",
+    shortLabel: "JP2",
+    hint: "Races five through eight on today's full card.",
   },
 ];
 
@@ -206,6 +218,26 @@ function buildSuggestions(args: {
     ];
   }
 
+  if (betType === "jackpot1") {
+    return [
+      "Build Jackpot 1 from today's first four races",
+      "Give me the top three runners in every Jackpot 1 leg",
+      nextUpRace ? `Can ${formatRacePrompt(nextUpRace)} be a Jackpot 1 banker?` : null,
+      todayRaceCount >= 4 ? `How should I spread Jackpot 1 across today's ${todayRaceCount} races?` : null,
+      ...shared,
+    ];
+  }
+
+  if (betType === "jackpot2") {
+    return [
+      "Build Jackpot 2 from races five to eight today",
+      "Give me the top three runners in every Jackpot 2 leg",
+      "Which Jackpot 2 leg needs the widest cover?",
+      todayRaceCount >= 8 ? `Compare Jackpot 1 and Jackpot 2 from today's ${todayRaceCount} races` : null,
+      ...shared,
+    ];
+  }
+
   return [
     "Build the strongest Pick 3 sequence on today's card",
     nextUpRace ? `Start a Pick 3 from ${formatRacePrompt(nextUpRace)}` : null,
@@ -240,10 +272,14 @@ export default function Chat() {
       raceCards.filter((race) => isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
     ),
   ];
-  const summaryTodayCards = Array.isArray(summaryData?.todayCards) ? summaryData.todayCards : [];
-  const todayRaces = summaryTodayCards.length > 0
-    ? summaryTodayCards
-    : usableRaces.filter((race) => race.status === "upcoming" || race.status === "analyzing");
+  const todayRaces = [
+    ...sortLiveRaceCards(
+      raceCards.filter((race) => race.isToday && isLiveRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
+    ),
+    ...sortHistoryRaceCards(
+      raceCards.filter((race) => race.isToday && isHistoryRaceCard(race) && (race.horseCount > 0 || !!race.topPrediction || !!race.result)),
+    ),
+  ];
   const weeklyOverview = Array.isArray(summaryData?.weeklyOverview) ? summaryData.weeklyOverview : [];
   const performance = summaryData?.performance && typeof summaryData.performance === "object" ? summaryData.performance : undefined;
   const focusRace = usableRaces.find((race) => race.id === selectedRaceId)
@@ -551,7 +587,7 @@ export default function Chat() {
               focusRace
                 ? `Ask for a ${selectedBetMeta.label.toLowerCase()} read on ${focusRace.name}, refresh forecasts, or compare the field...`
                 : todayRaces.length > 0
-                  ? `Ask for a ${selectedBetMeta.label.toLowerCase()} angle across today's ${todayRaces.length} live races, sync, forecasts, or weights...`
+                  ? `Ask for a ${selectedBetMeta.label.toLowerCase()} angle across today's ${todayRaces.length} races, sync, forecasts, or weights...`
                   : `Ask for a ${selectedBetMeta.label.toLowerCase()} angle, results history, sync, or weight changes...`
             }
             rows={1}

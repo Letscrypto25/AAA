@@ -360,7 +360,7 @@ export interface ChatWeightSuggestion {
   priceValue?: number;
 }
 
-export const CHAT_BET_TYPES = ["win", "place", "exacta", "trifecta", "pick3"] as const;
+export const CHAT_BET_TYPES = ["win", "place", "exacta", "trifecta", "pick3", "jackpot1", "jackpot2"] as const;
 export type ChatBetType = (typeof CHAT_BET_TYPES)[number];
 
 export type ChatActionSuggestion =
@@ -373,9 +373,13 @@ const BET_TYPE_LABELS: Record<ChatBetType, string> = {
   exacta: "Exacta",
   trifecta: "Trifecta",
   pick3: "Pick 3",
+  jackpot1: "Jackpot 1",
+  jackpot2: "Jackpot 2",
 };
 
 const BET_TYPE_PATTERNS: Array<{ type: ChatBetType; patterns: RegExp[] }> = [
+  { type: "jackpot2", patterns: [/\bjackpot\s*2\b/i, /\bjackpot2\b/i, /\bjp\s*2\b/i, /\bsecond\s+jackpot\b/i] },
+  { type: "jackpot1", patterns: [/\bjackpot\s*1\b/i, /\bjackpot1\b/i, /\bjp\s*1\b/i, /\bfirst\s+jackpot\b/i] },
   { type: "pick3", patterns: [/\bpick\s*3\b/i, /\bpick3\b/i, /\btreble\b/i] },
   { type: "trifecta", patterns: [/\btrifecta\b/i, /\btrio\b/i] },
   { type: "exacta", patterns: [/\bexacta\b/i, /\bforecast\b/i] },
@@ -527,6 +531,10 @@ function getBetTypeResponseGuide(betType: ChatBetType): string {
       return "Prioritise the best ordered first-second-third combination and explain whether the ticket should be boxed or kept in order.";
     case "pick3":
       return "Think in three-leg sequences across multiple races, favouring steady confidence across all legs over one flashy standout.";
+    case "jackpot1":
+      return "Build Jackpot 1 from the first four races on today's full card. Give the top three per leg, call out a possible banker, and do not invent horses outside the briefing.";
+    case "jackpot2":
+      return "Build Jackpot 2 from races five through eight on today's full card. Give the top three per leg, call out a possible banker, and do not invent horses outside the briefing.";
     default:
       return "Answer in the style that best fits the current active bet type.";
   }
@@ -607,6 +615,7 @@ The live FORECAST CONTEXT below is the source of truth. If older chat history co
 ## YOUR CAPABILITIES
 - Race analysis: Break down any race, compare the field, identify value bets and dangers
 - Best bet selection: Give a confident single best bet or each-way selection with clear reasoning
+- Jackpot building: For Jackpot 1 use today's first four races; for Jackpot 2 use today's races five to eight
 - Jockey and trainer intelligence: Know which SA jockeys and trainers are in form and which partnerships fire
 - Odds reading: Interpret market moves - shortening horses show market confidence, drifters suggest trouble
 - Weight adjustment: Optimise the full 10-factor prediction mix for the card conditions
@@ -639,6 +648,7 @@ ${raceDayBriefing ?? "No race data loaded yet - tell the user to click Sync on t
 - Be direct, confident, and specific - name horses, quote odds, cite form figures
 - When giving a best bet, format it clearly: **BEST BET: [Horse Name] @ [odds] in Race [N]**
 - For multi-race or multi-day asks, rank the races by confidence and explain why one card is stronger than another
+- For Jackpot 1 or Jackpot 2, use the explicit jackpot sequence from the FORECAST CONTEXT and list the top three runners per leg before giving any banker/spread opinion
 - Mention if the model was recently right or wrong when that matters
 - When the user asks what is going on, summarise the current live races, standout horse, model edge, and recent result lessons from the FORECAST CONTEXT
 - If the user asks to set, change, increase, decrease, or rebalance weights, either confirm the new mix or recommend one, and include the weights tag
