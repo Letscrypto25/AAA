@@ -222,6 +222,178 @@ function parseTrainerJockeyScore(record: string): number {
   return 0.61;
 }
 
+type HorseSourceSignals = {
+  starRating: number | null;
+  draw: number | null;
+  meritRating: number | null;
+  officialRating: number | null;
+  racingPostRating: number | null;
+  topSpeedRating: number | null;
+  restDays: number | null;
+  cardPoints: number | null;
+  speedPoints: number | null;
+  salePrice: number | null;
+  age: number | null;
+  overweight: number | null;
+  lastRunPositions: number[];
+  lastRunLengths: number[];
+  lastRunDistances: number[];
+  favourite: boolean;
+  gear: boolean;
+  ppw: boolean;
+  trainerChange: boolean;
+  gelded: boolean;
+  metadataCoverage: number;
+};
+
+function parseSignalNumber(text: string, patterns: RegExp[]): number | null {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const value = Number(match[1].replace(/,/g, ""));
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function parseSignalNumbers(text: string, pattern: RegExp): number[] {
+  return [...text.matchAll(pattern)]
+    .map((match) => Number(match[1]?.replace(/,/g, "")))
+    .filter((value) => Number.isFinite(value));
+}
+
+function isAffirmativeSignal(text: string, pattern: RegExp): boolean {
+  const match = text.match(pattern);
+  if (!match) return false;
+  const value = (match[1] ?? "").trim().toLowerCase();
+  return !/^(?:n|no|false|0|none|unknown)$/i.test(value);
+}
+
+function parseHorseSourceSignals(horse: typeof horsesTable.$inferSelect): HorseSourceSignals {
+  const text = `${horse.notes ?? ""} | ${horse.trainerJockeyRecord ?? ""}`;
+  const metadataMatches = [
+    /\bSex\s+[^|]+/i,
+    /\bColour\s+[^|]+/i,
+    /\bOwner\s+[^|]+/i,
+    /\bhorse_id=/i,
+    /\bjockey_id=/i,
+    /\btrainer_id=/i,
+    /\bRace\s+[^|]+/i,
+    /\bStatus\s+[^|]+/i,
+  ];
+
+  const sourceFields = [
+    parseSignalNumber(text, [/\bGallop star\s+(\d+(?:\.\d+)?)/i, /\bStars\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bDraw\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bMR\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bOR\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bRPR\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bTS\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bRest\s+(\d+(?:\.\d+)?)d/i]),
+    parseSignalNumber(text, [/\bCard points\s+(-?\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bSpeed points\s+(-?\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bSale\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bAge\s+(\d+(?:\.\d+)?)/i]),
+    parseSignalNumber(text, [/\bOverweight\s+(\d+(?:\.\d+)?)/i]),
+  ];
+  const metadataCoverage = (
+    sourceFields.filter((value) => value != null).length
+    + metadataMatches.filter((pattern) => pattern.test(text)).length
+    + (/\bGear(?: key)?\s+[^|]+/i.test(text) ? 1 : 0)
+    + (/\bPPW\s+[^|]+/i.test(text) ? 1 : 0)
+    + (/\b(?:Ex trainer|Trainer change|Stable change)\s+[^|]+/i.test(text) ? 1 : 0)
+    + (/\b(?:Just gelded|Gelded)\s+[^|]+/i.test(text) ? 1 : 0)
+    + (/\bLast runs\s+/i.test(text) ? 2 : 0)
+  ) / 22;
+
+  return {
+    starRating: sourceFields[0],
+    draw: sourceFields[1],
+    meritRating: sourceFields[2],
+    officialRating: sourceFields[3],
+    racingPostRating: sourceFields[4],
+    topSpeedRating: sourceFields[5],
+    restDays: sourceFields[6],
+    cardPoints: sourceFields[7],
+    speedPoints: sourceFields[8],
+    salePrice: sourceFields[9],
+    age: sourceFields[10],
+    overweight: sourceFields[11],
+    lastRunPositions: parseSignalNumbers(text, /\bpos\s+(\d+(?:\.\d+)?)/gi),
+    lastRunLengths: parseSignalNumbers(text, /\blen\s+([0-9]+(?:\.[0-9]+)?)/gi),
+    lastRunDistances: parseSignalNumbers(text, /\b(\d{3,4})m\b/gi),
+    favourite: isAffirmativeSignal(text, /\bFavourite\s+([^|]+)/i),
+    gear: /\bGear(?: key)?\s+[^|]+/i.test(text),
+    ppw: /\bPPW\s+[^|]+/i.test(text),
+    trainerChange: /\b(?:Ex trainer|Trainer change|Stable change)\s+[^|]+/i.test(text),
+    gelded: /\b(?:Just gelded|Gelded)\s+[^|]+/i.test(text),
+    metadataCoverage: clamp(metadataCoverage, 0, 1),
+  };
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function scoreFromField(value: number | null, fieldValues: Array<number | null>, fallback: number = 0.5): number {
+  if (value == null) return fallback;
+  const values = fieldValues.filter((item): item is number => item != null && Number.isFinite(item));
+  if (values.length < 2) return clamp(fallback + 0.04, 0.2, 0.86);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (Math.abs(max - min) < 0.001) return clamp(fallback + 0.04, 0.2, 0.86);
+  return clamp(0.24 + ((value - min) / (max - min)) * 0.64, 0.2, 0.9);
+}
+
+function scoreStarRating(value: number | null): number {
+  if (value == null) return 0.5;
+  const scale = value > 5 ? 10 : 5;
+  return clamp(0.24 + (value / scale) * 0.66, 0.22, 0.93);
+}
+
+function scoreMeritRating(value: number | null): number {
+  if (value == null) return 0.5;
+  return clamp(0.18 + ((value - 45) / 70) * 0.72, 0.18, 0.94);
+}
+
+function scoreRestDays(value: number | null): number {
+  if (value == null) return 0.55;
+  if (value < 7) return clamp(0.36 + value * 0.025, 0.36, 0.52);
+  if (value <= 21) return clamp(0.58 + ((value - 7) / 14) * 0.14, 0.58, 0.72);
+  if (value <= 60) return 0.78;
+  if (value <= 100) return clamp(0.74 - ((value - 60) / 40) * 0.12, 0.62, 0.74);
+  if (value <= 180) return clamp(0.58 - ((value - 100) / 80) * 0.16, 0.42, 0.58);
+  return 0.36;
+}
+
+function scoreDraw(value: number | null, fieldSize: number): number {
+  if (value == null || fieldSize <= 1) return 0.5;
+  const insideBias = 1 - (value - 1) / Math.max(fieldSize - 1, 1);
+  return clamp(0.34 + insideBias * 0.48, 0.3, 0.84);
+}
+
+function scoreAge(value: number | null): number {
+  if (value == null) return 0.55;
+  if (value < 3) return 0.46;
+  if (value <= 5) return 0.72;
+  if (value <= 7) return 0.64;
+  if (value <= 9) return 0.52;
+  return 0.42;
+}
+
+function scoreRecentLengths(lengths: number[]): number {
+  const avg = average(lengths);
+  if (avg == null) return 0.5;
+  return clamp(0.84 - (avg / 10) * 0.46, 0.26, 0.86);
+}
+
+function scoreDistanceFitFromRuns(distances: number[], raceDistance: number): number {
+  if (distances.length === 0 || raceDistance <= 0) return 0.5;
+  const bestGap = Math.min(...distances.map((distance) => Math.abs(distance - raceDistance)));
+  return clamp(0.86 - (bestGap / 700) * 0.42, 0.32, 0.88);
+}
+
 function buildMarketScores(
   horse: typeof horsesTable.$inferSelect,
   maxOdds: number,
@@ -278,6 +450,7 @@ function getFactorProfile(factors: PredictionFactorBreakdown): {
 function buildFallbackPredictions(
   horses: Array<typeof horsesTable.$inferSelect>,
   weights: PredictionWeightConfig,
+  race: Pick<typeof racesTable.$inferSelect, "distance" | "surface">,
 ): HorsePrediction[] {
   const activeHorses = horses
     .map((horse, index) => ({ horse, index }))
@@ -286,45 +459,138 @@ function buildFallbackPredictions(
   const averageWeight = activeHorses.reduce((sum, { horse }) => sum + (horse.weight ?? 57), 0) / Math.max(activeHorses.length, 1);
   const fieldAverageOdds = activeHorses.reduce((sum, { horse }) => sum + horse.currentOdds, 0) / Math.max(activeHorses.length, 1);
   const competitiveDensity = clamp(1 - (maxOdds - 1.2) / 25, 0.2, 0.95);
+  const sourceSignals = activeHorses.map(({ horse, index }) => ({
+    index,
+    signals: parseHorseSourceSignals(horse),
+  }));
+  const signalByIndex = new Map(sourceSignals.map(({ index, signals }) => [index, signals]));
+  const fieldSignalValues = {
+    cardPoints: sourceSignals.map(({ signals }) => signals.cardPoints),
+    speedPoints: sourceSignals.map(({ signals }) => signals.speedPoints),
+    meritRating: sourceSignals.map(({ signals }) => signals.meritRating ?? signals.officialRating),
+    racingPostRating: sourceSignals.map(({ signals }) => signals.racingPostRating),
+    topSpeedRating: sourceSignals.map(({ signals }) => signals.topSpeedRating),
+    salePrice: sourceSignals.map(({ signals }) => signals.salePrice),
+  };
 
   return activeHorses.map(({ horse, index }) => {
+    const signals = signalByIndex.get(index) ?? parseHorseSourceSignals(horse);
     const formScore = parseFormScore(horse.form);
-    const courseScore = horse.courseRecord ? clamp(0.72 + formScore * 0.2, 0.4, 0.94) : clamp(0.4 + formScore * 0.12, 0.25, 0.72);
-    const distanceScore = horse.distanceRecord ? clamp(0.7 + formScore * 0.22, 0.42, 0.94) : clamp(0.38 + formScore * 0.24, 0.24, 0.78);
-    const jockeyTrainerScore = parseTrainerJockeyScore(horse.trainerJockeyRecord);
+    const lastRunScore = signals.lastRunPositions.length > 0 ? parseFormScore(signals.lastRunPositions.map((value) => String(Math.round(value))).join("-")) : formScore;
+    const lastLengthScore = scoreRecentLengths(signals.lastRunLengths);
+    const lastDistanceFitScore = scoreDistanceFitFromRuns(signals.lastRunDistances, race.distance);
+    const starScore = scoreStarRating(signals.starRating);
+    const restScore = scoreRestDays(signals.restDays);
+    const drawScore = scoreDraw(signals.draw, activeHorses.length);
+    const ageScore = scoreAge(signals.age);
+    const cardPointScore = scoreFromField(signals.cardPoints, fieldSignalValues.cardPoints, 0.52);
+    const speedPointScore = scoreFromField(signals.speedPoints, fieldSignalValues.speedPoints, 0.52);
+    const meritScore = clamp(
+      scoreMeritRating(signals.meritRating ?? signals.officialRating) * 0.62
+        + scoreFromField(signals.meritRating ?? signals.officialRating, fieldSignalValues.meritRating, 0.5) * 0.38,
+      0.18,
+      0.94,
+    );
+    const racingPostScore = scoreFromField(signals.racingPostRating, fieldSignalValues.racingPostRating, 0.5);
+    const topSpeedScore = scoreFromField(signals.topSpeedRating, fieldSignalValues.topSpeedRating, 0.5);
+    const saleScore = scoreFromField(signals.salePrice, fieldSignalValues.salePrice, 0.5);
+    const externalClassScore = clamp(
+      meritScore * 0.36
+        + speedPointScore * 0.18
+        + cardPointScore * 0.16
+        + racingPostScore * 0.12
+        + topSpeedScore * 0.1
+        + starScore * 0.08,
+      0.18,
+      0.94,
+    );
+    const gallopFormScore = clamp(
+      formScore * 0.42
+        + lastRunScore * 0.2
+        + lastLengthScore * 0.1
+        + cardPointScore * 0.11
+        + speedPointScore * 0.09
+        + starScore * 0.08,
+      0.14,
+      0.96,
+    );
+    const sourceAdjustment =
+      (signals.gear ? 0.015 : 0)
+      + (signals.gelded ? 0.012 : 0)
+      + (signals.ppw ? 0.008 : 0)
+      + (signals.trainerChange ? -0.035 : 0)
+      + (signals.favourite ? 0.025 : 0);
+    const courseScore = horse.courseRecord
+      ? clamp(0.58 + gallopFormScore * 0.18 + cardPointScore * 0.08 + starScore * 0.04 + sourceAdjustment, 0.34, 0.94)
+      : clamp(0.32 + gallopFormScore * 0.16 + cardPointScore * 0.08 + externalClassScore * 0.06 + sourceAdjustment * 0.5, 0.2, 0.78);
+    const distanceScore = horse.distanceRecord
+      ? clamp(0.56 + gallopFormScore * 0.16 + lastDistanceFitScore * 0.12 + speedPointScore * 0.08 + sourceAdjustment, 0.34, 0.94)
+      : clamp(0.3 + gallopFormScore * 0.14 + lastDistanceFitScore * 0.14 + speedPointScore * 0.08 + sourceAdjustment * 0.5, 0.2, 0.82);
+    const jockeyTrainerScore = clamp(
+      parseTrainerJockeyScore(horse.trainerJockeyRecord) * 0.56
+        + starScore * 0.14
+        + restScore * 0.1
+        + externalClassScore * 0.08
+        + ageScore * 0.04
+        + sourceAdjustment,
+      0.18,
+      0.92,
+    );
     const marketScores = buildMarketScores(horse, maxOdds);
     const historyScore = clamp(
-      formScore * 0.42 + marketScores.marketStrength * 0.38 + (horse.distanceRecord ? 0.12 : 0) + (horse.courseRecord ? 0.08 : 0),
+      gallopFormScore * 0.28
+        + marketScores.marketStrength * 0.22
+        + externalClassScore * 0.22
+        + speedPointScore * 0.1
+        + (horse.distanceRecord ? 0.1 : 0)
+        + (horse.courseRecord ? 0.08 : 0),
       0.18,
-      0.9,
+      0.94,
     );
     const weightDelta = (averageWeight - (horse.weight ?? averageWeight)) / Math.max(averageWeight, 1);
-    const weightCarriedScore = clamp(0.52 + weightDelta * 3.2, 0.18, 0.88);
+    const overweightPenalty = signals.overweight == null ? 0 : clamp(signals.overweight / 5, 0, 1) * 0.1;
+    const weightCarriedScore = clamp(0.48 + weightDelta * 2.9 + ageScore * 0.08 - overweightPenalty, 0.16, 0.88);
     const surfaceFitScore = clamp(
-      0.38
-        + (horse.courseRecord ? 0.18 : 0)
-        + (horse.distanceRecord ? 0.14 : 0)
-        + (/turf|grass|poly|sand/i.test(horse.notes ?? "") ? 0.08 : 0)
-        + formScore * 0.16,
+      0.28
+        + (horse.courseRecord ? 0.14 : 0)
+        + (horse.distanceRecord ? 0.1 : 0)
+        + (/turf|grass|poly|sand|all.weather/i.test(`${race.surface} ${horse.notes ?? ""}`) ? 0.06 : 0)
+        + gallopFormScore * 0.14
+        + lastDistanceFitScore * 0.08
+        + restScore * 0.06
+        + sourceAdjustment * 0.7,
       0.22,
       0.92,
     );
     const paceProfileScore = clamp(
-      0.34
-        + formScore * 0.22
-        + marketScores.movementStrength * 0.24
-        + (horse.number <= 4 ? 0.06 : 0)
-        + (horse.number >= 10 ? -0.03 : 0),
+      0.24
+        + gallopFormScore * 0.16
+        + marketScores.movementStrength * 0.18
+        + drawScore * 0.18
+        + speedPointScore * 0.16
+        + restScore * 0.06
+        + sourceAdjustment * 0.6,
       0.18,
       0.86,
     );
     const fieldStrengthScore = clamp(
-      0.26 + marketScores.marketStrength * 0.42 + competitiveDensity * 0.18 + historyScore * 0.14,
+      0.18
+        + marketScores.marketStrength * 0.26
+        + competitiveDensity * 0.12
+        + historyScore * 0.16
+        + externalClassScore * 0.24
+        + starScore * 0.08
+        + saleScore * 0.04
+        + (signals.favourite ? 0.02 : 0),
       0.18,
       0.9,
     );
     const priceValueScore = clamp(
-      0.45 + (historyScore + courseScore + distanceScore) / 6 - horse.currentOdds / Math.max(fieldAverageOdds * 4, 1),
+      0.38
+        + (historyScore + courseScore + distanceScore + externalClassScore) / 8
+        + (saleScore - 0.5) * 0.06
+        - horse.currentOdds / Math.max(fieldAverageOdds * 4, 1)
+        - (signals.favourite ? 0.025 : 0),
       0.16,
       0.9,
     );
@@ -361,8 +627,9 @@ function buildFallbackPredictions(
       + (horse.form.trim() ? 1 : 0)
       + (horse.openingOdds != null ? 1 : 0)
       + (horse.weight != null ? 1 : 0)
-      + (horse.notes?.trim() ? 1 : 0);
-    const coverageScore = dataCoverage / 7;
+      + (horse.notes?.trim() ? 1 : 0)
+      + signals.metadataCoverage * 5;
+    const coverageScore = dataCoverage / 12;
 
     return {
       horseIndex: index,
@@ -373,7 +640,9 @@ function buildFallbackPredictions(
         ...factorBlend,
         overall: round(overall),
       },
-      aiSummary: "Fallback scoring blended form, market, field pressure, carried weight, and value shape.",
+      aiSummary: signals.metadataCoverage > 0.2
+        ? "Gallop-enhanced scoring blended form, draw, MR, rest, speed/card points, market, weight, and value shape."
+        : "Fallback scoring blended form, market, field pressure, carried weight, and value shape.",
     };
   });
 }
@@ -608,7 +877,7 @@ export async function runRaceForecast(
     learningSnapshot.factorAdjustments,
     learningSnapshot.sampleSize,
   );
-  const fallbackPredictions = buildFallbackPredictions(horses, adaptiveWeights);
+  const fallbackPredictions = buildFallbackPredictions(horses, adaptiveWeights, race);
 
   let rawPredictions: HorsePrediction[];
   try {

@@ -179,22 +179,61 @@ function parseWeight(value: number | undefined, overweight: number | undefined):
   return Math.round(total * 10) / 10;
 }
 
+function cleanNoteText(value?: string | number | null): string | null {
+  const text = String(value ?? "")
+    .replace(/<br\s*\/?>/gi, ", ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text : null;
+}
+
+function buildLastRunNotes(lastRuns?: GallopLastRun[]): string | null {
+  const runs = (lastRuns ?? [])
+    .slice(0, 6)
+    .map((run) => {
+      const parts = [
+        run.date ? String(run.date) : null,
+        Number.isFinite(Number(run.club)) ? `club ${run.club}` : null,
+        Number.isFinite(Number(run.race)) ? `race ${run.race}` : null,
+        Number.isFinite(Number(run.finished)) && Number(run.finished) > 0 ? `pos ${run.finished}` : null,
+        Number.isFinite(Number(run.distance)) && Number(run.distance) > 0 ? `${run.distance}m` : null,
+        cleanNoteText(run.lengths) ? `len ${cleanNoteText(run.lengths)}` : null,
+      ].filter(Boolean);
+
+      return parts.length > 0 ? parts.join(" ") : null;
+    })
+    .filter((run): run is string => run !== null);
+
+  return runs.length > 0 ? `Last runs ${runs.join("; ")}` : null;
+}
+
 function buildRunnerNotes(runner: GallopRunner, race: GallopRaceDetail): string | null {
   const parts = [
     Number.isFinite(runner.starRating) ? `Gallop star ${runner.starRating}` : null,
     Number.isFinite(runner.draw) ? `Draw ${runner.draw}` : null,
+    Number.isFinite(runner.age) ? `Age ${runner.age}` : null,
+    cleanNoteText(runner.sex) ? `Sex ${cleanNoteText(runner.sex)}` : null,
+    cleanNoteText(runner.colour) ? `Colour ${cleanNoteText(runner.colour)}` : null,
     Number.isFinite(runner.MR) && runner.MR! > 0 ? `MR ${runner.MR}` : null,
     Number.isFinite(runner.restDays) ? `Rest ${runner.restDays}d` : null,
+    Number.isFinite(runner.overweight) && Number(runner.overweight) > 0 ? `Overweight ${runner.overweight}` : null,
     Number.isFinite(runner.cPoints) ? `Card points ${runner.cPoints}` : null,
     Number.isFinite(runner.sPoints) ? `Speed points ${runner.sPoints}` : null,
-    runner.owner?.trim() ? `Owner ${runner.owner.trim()}` : null,
-    runner.equipment?.trim() ? `Gear ${runner.equipment.trim()}` : null,
-    runner.equipmentKey?.trim() ? runner.equipmentKey.trim().replace(/<br\s*\/?>/gi, ", ") : null,
-    runner.horseWeightColour?.trim() && runner.horseWeightColour !== "White" ? `PPW ${runner.horseWeightColour.trim()}` : null,
+    cleanNoteText(runner.favourite) ? `Favourite ${cleanNoteText(runner.favourite)}` : null,
+    cleanNoteText(runner.status) ? `Status ${cleanNoteText(runner.status)}` : null,
+    cleanNoteText(runner.owner) ? `Owner ${cleanNoteText(runner.owner)}` : null,
+    cleanNoteText(runner.equipment) ? `Gear ${cleanNoteText(runner.equipment)}` : null,
+    cleanNoteText(runner.equipmentKey) ? `Gear key ${cleanNoteText(runner.equipmentKey)}` : null,
+    cleanNoteText(runner.horseWeightColour) && runner.horseWeightColour !== "White" ? `PPW ${cleanNoteText(runner.horseWeightColour)}` : null,
     runner.price ? `Sale ${String(runner.price).replace(/,/g, "")} ${runner.saleAbbr ?? ""}`.trim() : null,
-    runner.exTrainer?.trim() ? `Ex trainer ${runner.exTrainer.trim()}` : null,
-    runner.exDate?.trim() ? `Trainer change ${runner.exDate.trim()}` : null,
-    race.description?.trim() ? `Race ${race.description.trim()}` : null,
+    cleanNoteText(runner.stableChange) ? `Stable change ${cleanNoteText(runner.stableChange)}` : null,
+    cleanNoteText(runner.exTrainer) ? `Ex trainer ${cleanNoteText(runner.exTrainer)}` : null,
+    cleanNoteText(runner.exDate) ? `Trainer change ${cleanNoteText(runner.exDate)}` : null,
+    cleanNoteText(runner.justGelded) ? `Just gelded ${cleanNoteText(runner.justGelded)}` : null,
+    cleanNoteText(runner.gelded) ? `Gelded ${cleanNoteText(runner.gelded)}` : null,
+    buildLastRunNotes(runner.lastRuns),
+    cleanNoteText(race.description) ? `Race ${cleanNoteText(race.description)}` : null,
     runner.horseSeq ? `horse_id=${runner.horseSeq}` : null,
     runner.jockeySeq ? `jockey_id=${runner.jockeySeq}` : null,
     runner.trainerSeq ? `trainer_id=${runner.trainerSeq}` : null,

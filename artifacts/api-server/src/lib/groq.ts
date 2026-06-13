@@ -301,6 +301,7 @@ WEIGHTING FACTORS:
 
 For each horse provide factor scores (0.0-1.0), overall weighted score, confidence, and 1-sentence analysis.
 Use the official runner number shown as #N as the horse identity. Keep that runner number exact and return it in the JSON.
+Treat structured Notes as source data, not decoration. Use Gallop star, draw, MR/OR/RPR/TS ratings, rest days, card points, speed points, age, gear/gelding/trainer-change flags, PPW, sale price, and last-run position/length/distance details when scoring the ten factors.
 
 Respond with ONLY valid JSON:
 {
