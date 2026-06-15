@@ -13,7 +13,7 @@ import {
   type PredictionFactorBreakdown,
   type PredictionWeightConfig,
 } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 import { analyzeRaceWithAI, type HorsePrediction } from "./groq";
 import { logger } from "./logger";
 import { getMinutesToRace, getRaceTimeProfile } from "./race-time";
@@ -266,7 +266,8 @@ function isAffirmativeSignal(text: string, pattern: RegExp): boolean {
   const match = text.match(pattern);
   if (!match) return false;
   const value = (match[1] ?? "").trim().toLowerCase();
-  return !/^(?:n|no|false|0|none|unknown)$/i.test(value);
+  if (!value || /^(?:n|no|false|0|none|unknown)$/i.test(value)) return false;
+  return /^(?:y|yes|true|1|fav|favourite|favorite)$/i.test(value);
 }
 
 function parseHorseSourceSignals(horse: typeof horsesTable.$inferSelect): HorseSourceSignals {
@@ -303,8 +304,8 @@ function parseHorseSourceSignals(horse: typeof horsesTable.$inferSelect): HorseS
     + (/\bPPW\s+[^|]+/i.test(text) ? 1 : 0)
     + (/\b(?:Ex trainer|Trainer change|Stable change)\s+[^|]+/i.test(text) ? 1 : 0)
     + (/\b(?:Just gelded|Gelded)\s+[^|]+/i.test(text) ? 1 : 0)
-    + (/\bLast runs\s+/i.test(text) ? 2 : 0)
-  ) / 22;
+    + (/\bLast runs\s+/i.test(text) ? 1 : 0)
+  ) / 28;
 
   return {
     starRating: sourceFields[0],
@@ -495,31 +496,31 @@ function buildFallbackPredictions(
     const topSpeedScore = scoreFromField(signals.topSpeedRating, fieldSignalValues.topSpeedRating, 0.5);
     const saleScore = scoreFromField(signals.salePrice, fieldSignalValues.salePrice, 0.5);
     const externalClassScore = clamp(
-      meritScore * 0.36
-        + speedPointScore * 0.18
-        + cardPointScore * 0.16
+      meritScore * 0.4
+        + speedPointScore * 0.16
+        + cardPointScore * 0.13
         + racingPostScore * 0.12
-        + topSpeedScore * 0.1
+        + topSpeedScore * 0.11
         + starScore * 0.08,
       0.18,
       0.94,
     );
     const gallopFormScore = clamp(
-      formScore * 0.42
-        + lastRunScore * 0.2
-        + lastLengthScore * 0.1
-        + cardPointScore * 0.11
-        + speedPointScore * 0.09
-        + starScore * 0.08,
+      formScore * 0.46
+        + lastRunScore * 0.22
+        + lastLengthScore * 0.11
+        + cardPointScore * 0.08
+        + speedPointScore * 0.07
+        + starScore * 0.06,
       0.14,
       0.96,
     );
     const sourceAdjustment =
-      (signals.gear ? 0.015 : 0)
-      + (signals.gelded ? 0.012 : 0)
-      + (signals.ppw ? 0.008 : 0)
-      + (signals.trainerChange ? -0.035 : 0)
-      + (signals.favourite ? 0.025 : 0);
+      (signals.gear ? 0.004 : 0)
+      + (signals.gelded ? 0.003 : 0)
+      + (signals.ppw ? 0.004 : 0)
+      + (signals.trainerChange ? -0.018 : 0)
+      + (signals.favourite ? 0.006 : 0);
     const courseScore = horse.courseRecord
       ? clamp(0.58 + gallopFormScore * 0.18 + cardPointScore * 0.08 + starScore * 0.04 + sourceAdjustment, 0.34, 0.94)
       : clamp(0.32 + gallopFormScore * 0.16 + cardPointScore * 0.08 + externalClassScore * 0.06 + sourceAdjustment * 0.5, 0.2, 0.78);
@@ -580,17 +581,17 @@ function buildFallbackPredictions(
         + historyScore * 0.16
         + externalClassScore * 0.24
         + starScore * 0.08
-        + saleScore * 0.04
-        + (signals.favourite ? 0.02 : 0),
+        + saleScore * 0.02
+        + (signals.favourite ? 0.005 : 0),
       0.18,
       0.9,
     );
     const priceValueScore = clamp(
       0.38
         + (historyScore + courseScore + distanceScore + externalClassScore) / 8
-        + (saleScore - 0.5) * 0.06
+        + (saleScore - 0.5) * 0.025
         - horse.currentOdds / Math.max(fieldAverageOdds * 4, 1)
-        - (signals.favourite ? 0.025 : 0),
+        - (signals.favourite ? 0.01 : 0),
       0.16,
       0.9,
     );
@@ -628,8 +629,8 @@ function buildFallbackPredictions(
       + (horse.openingOdds != null ? 1 : 0)
       + (horse.weight != null ? 1 : 0)
       + (horse.notes?.trim() ? 1 : 0)
-      + signals.metadataCoverage * 5;
-    const coverageScore = dataCoverage / 12;
+      + signals.metadataCoverage * 2;
+    const coverageScore = dataCoverage / 9;
 
     return {
       horseIndex: index,
@@ -762,7 +763,6 @@ function decoratePredictions(
   const sampleScale = learningScale(learningSnapshot.sampleSize, 40);
   const sortedRaw = [...rawPredictions].sort((left, right) => clamp(right.score, 0, 1) - clamp(left.score, 0, 1));
   const topScore = clamp(sortedRaw[0]?.score ?? 0.5, 0, 1);
-  const secondScore = clamp(sortedRaw[1]?.score ?? topScore - 0.03, 0, 1);
   const bottomScore = clamp(sortedRaw[sortedRaw.length - 1]?.score ?? 0.1, 0, 1);
   const fieldSizePenalty = clamp((sortedRaw.length - 6) * 0.022, 0, 0.18);
   const scoreRange = clamp(topScore - bottomScore, 0.04, 0.42);
@@ -1002,6 +1002,23 @@ function roundMovingAverage(previous: number, sampleSize: number, nextValue: num
   return round((previous * sampleSize + nextValue) / (sampleSize + 1));
 }
 
+function chunkValues<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function getEntryFactors(entry: LearningEntryLike): PredictionFactorBreakdown {
+  return entry.factors as PredictionFactorBreakdown;
+}
+
+function isKnownTopFinisher(horseId: number, finishMap: Map<number, number>): boolean {
+  const position = finishMap.get(horseId);
+  return position != null && position <= 4;
+}
+
 function computeUpdatedLearningSummary(
   learningSnapshot: LearningSummarySnapshot,
   learningEntries: LearningEntryLike[],
@@ -1017,12 +1034,20 @@ function computeUpdatedLearningSummary(
   const topPickCorrect = topPick.horseId === winnerHorseId;
   const topPickPlaced = (finishMap.get(topPick.horseId) ?? 99) <= 3;
   const topPickConfidence = topPick.confidence ?? 0.5;
+  const rankedEntries = [...learningEntries].sort((left, right) => left.rank - right.rank);
+  const topFourEntries = rankedEntries.filter((entry) => entry.rank <= 4);
+  const knownTopFinishers = rankedEntries.filter((entry) => isKnownTopFinisher(entry.horseId, finishMap));
+  const topFourHit = topFourEntries.some((entry) => isKnownTopFinisher(entry.horseId, finishMap));
   const winnerEntry = learningEntries.find((entry) => entry.horseId === winnerHorseId);
+  const bestKnownFinisherEntry = knownTopFinishers
+    .sort((left, right) => (finishMap.get(left.horseId) ?? 99) - (finishMap.get(right.horseId) ?? 99) || left.rank - right.rank)[0]
+    ?? winnerEntry
+    ?? null;
 
   const nextAdjustments: LearningFactorAdjustments = { ...learningSnapshot.factorAdjustments };
-  if (winnerEntry) {
+  if (bestKnownFinisherEntry) {
     const averages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
-      const total = learningEntries.reduce((sum, entry) => sum + ((entry.factors as PredictionFactorBreakdown)[key] ?? 0.5), 0);
+      const total = learningEntries.reduce((sum, entry) => sum + (getEntryFactors(entry)[key] ?? 0.5), 0);
       acc[key] = learningEntries.length > 0 ? total / learningEntries.length : 0.5;
       return acc;
     }, {
@@ -1037,16 +1062,23 @@ function computeUpdatedLearningSummary(
       paceProfile: 0.5,
       priceValue: 0.5,
     });
+    const topFourAverages = FACTOR_KEYS.reduce<Record<FactorKey, number>>((acc, key) => {
+      const total = topFourEntries.reduce((sum, entry) => sum + (getEntryFactors(entry)[key] ?? 0.5), 0);
+      acc[key] = topFourEntries.length > 0 ? total / topFourEntries.length : averages[key];
+      return acc;
+    }, { ...averages });
 
     for (const key of FACTOR_KEYS) {
-      const winnerValue = (winnerEntry.factors as PredictionFactorBreakdown)[key] ?? 0.5;
-      const baselineValue = topPickCorrect
+      const targetValue = getEntryFactors(bestKnownFinisherEntry)[key] ?? 0.5;
+      const baselineValue = topFourHit
         ? averages[key]
-        : (topPick.factors as PredictionFactorBreakdown | undefined)?.[key] ?? averages[key];
-      const signal = clamp(winnerValue - baselineValue, -1, 1) * 0.08;
+        : topFourAverages[key] ?? getEntryFactors(topPick)[key] ?? averages[key];
+      const signal = clamp(targetValue - baselineValue, -1, 1) * (topFourHit ? 0.045 : 0.08);
       nextAdjustments[key] = round(clamp(roundMovingAverage(learningSnapshot.factorAdjustments[key], sampleSize, signal), -0.18, 0.18));
     }
   }
+
+  const confidenceOutcome = topPickCorrect ? 1 : topPickPlaced ? 0.55 : topFourHit ? 0.35 : 0;
 
   return {
     topPickCorrect,
@@ -1055,7 +1087,7 @@ function computeUpdatedLearningSummary(
       topPickWinRate: roundMovingAverage(learningSnapshot.topPickWinRate, sampleSize, topPickCorrect ? 1 : 0),
       placedRate: roundMovingAverage(learningSnapshot.placedRate, sampleSize, topPickPlaced ? 1 : 0),
       averageConfidence: roundMovingAverage(learningSnapshot.averageConfidence, sampleSize, topPickConfidence),
-      confidenceBias: roundMovingAverage(learningSnapshot.confidenceBias, sampleSize, (topPickCorrect ? 1 : 0) - topPickConfidence),
+      confidenceBias: roundMovingAverage(learningSnapshot.confidenceBias, sampleSize, confidenceOutcome - topPickConfidence),
       factorAdjustments: nextAdjustments,
     },
   };
@@ -1067,6 +1099,60 @@ export async function rebuildLearningFeedbackFromHistory(): Promise<{ applied: n
     .select()
     .from(raceResultsTable)
     .orderBy(raceResultsTable.officialAt, raceResultsTable.id);
+  const raceIds = results.map((result) => result.raceId);
+  const snapshots: Array<{ id: number; raceId: number; createdAt: Date }> = [];
+  for (const raceIdChunk of chunkValues(raceIds, 50)) {
+    snapshots.push(
+      ...await db
+        .select({
+          id: forecastSnapshotsTable.id,
+          raceId: forecastSnapshotsTable.raceId,
+          createdAt: forecastSnapshotsTable.createdAt,
+        })
+        .from(forecastSnapshotsTable)
+        .where(inArray(forecastSnapshotsTable.raceId, raceIdChunk))
+        .orderBy(desc(forecastSnapshotsTable.createdAt), desc(forecastSnapshotsTable.id)),
+    );
+  }
+  const latestSnapshotByRaceId = new Map<number, { id: number; raceId: number; createdAt: Date }>();
+  for (const snapshot of snapshots) {
+    if (!latestSnapshotByRaceId.has(snapshot.raceId)) {
+      latestSnapshotByRaceId.set(snapshot.raceId, snapshot);
+    }
+  }
+  const snapshotIds = [...latestSnapshotByRaceId.values()].map((snapshot) => snapshot.id);
+  const snapshotEntries: Array<typeof forecastEntriesTable.$inferSelect> = [];
+  for (const snapshotIdChunk of chunkValues(snapshotIds, 50)) {
+    snapshotEntries.push(
+      ...await db
+        .select()
+        .from(forecastEntriesTable)
+        .where(inArray(forecastEntriesTable.snapshotId, snapshotIdChunk))
+        .orderBy(forecastEntriesTable.snapshotId, forecastEntriesTable.rank),
+    );
+  }
+  const snapshotEntriesBySnapshotId = new Map<number, typeof forecastEntriesTable.$inferSelect[]>();
+  for (const entry of snapshotEntries) {
+    const entries = snapshotEntriesBySnapshotId.get(entry.snapshotId) ?? [];
+    entries.push(entry);
+    snapshotEntriesBySnapshotId.set(entry.snapshotId, entries);
+  }
+  const predictions: Array<typeof predictionsTable.$inferSelect> = [];
+  for (const raceIdChunk of chunkValues(raceIds, 50)) {
+    predictions.push(
+      ...await db
+        .select()
+        .from(predictionsTable)
+        .where(inArray(predictionsTable.raceId, raceIdChunk))
+        .orderBy(predictionsTable.raceId, predictionsTable.rank),
+    );
+  }
+  const predictionsByRaceId = new Map<number, typeof predictionsTable.$inferSelect[]>();
+  for (const prediction of predictions) {
+    const entries = predictionsByRaceId.get(prediction.raceId) ?? [];
+    entries.push(prediction);
+    predictionsByRaceId.set(prediction.raceId, entries);
+  }
 
   let snapshot = buildLearningSnapshot({
     ...learning,
@@ -1086,28 +1172,11 @@ export async function rebuildLearningFeedbackFromHistory(): Promise<{ applied: n
     if (result.runnerUpHorseId) finishMap.set(result.runnerUpHorseId, 2);
     if (result.thirdHorseId) finishMap.set(result.thirdHorseId, 3);
 
-    const [latestSnapshot] = await db
-      .select()
-      .from(forecastSnapshotsTable)
-      .where(eq(forecastSnapshotsTable.raceId, result.raceId))
-      .orderBy(desc(forecastSnapshotsTable.createdAt))
-      .limit(1);
-
-    const snapshotEntries = latestSnapshot
-      ? await db
-          .select()
-          .from(forecastEntriesTable)
-          .where(eq(forecastEntriesTable.snapshotId, latestSnapshot.id))
-          .orderBy(forecastEntriesTable.rank)
-      : [];
-
-    const learningEntries = snapshotEntries.length > 0
-      ? snapshotEntries
-      : await db
-          .select()
-          .from(predictionsTable)
-          .where(eq(predictionsTable.raceId, result.raceId))
-          .orderBy(predictionsTable.rank);
+    const latestSnapshot = latestSnapshotByRaceId.get(result.raceId) ?? null;
+    const latestSnapshotEntries = latestSnapshot ? snapshotEntriesBySnapshotId.get(latestSnapshot.id) ?? [] : [];
+    const learningEntries = latestSnapshotEntries.length > 0
+      ? latestSnapshotEntries
+      : predictionsByRaceId.get(result.raceId) ?? [];
 
     const computed = computeUpdatedLearningSummary(snapshot, learningEntries, finishMap);
     if (!computed) {
