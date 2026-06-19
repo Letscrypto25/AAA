@@ -2,7 +2,7 @@ import Groq from "groq-sdk";
 import { logger } from "./logger";
 import { getMinutesToRace } from "./race-time";
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "openai/gpt-oss-120b";
 
 let client: Groq | null = null;
 
